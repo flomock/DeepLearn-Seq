@@ -10,5 +10,5 @@ from_db_to_train_set.py
 GridSearchOnServer.py
 - trains a GBM model
 
-the other methods are mainly copied from previos work from https://github.com/phiweger
+the other scripts are mainly copied from previos work from https://github.com/phiweger
 who used GBM to predict the host of a virus
