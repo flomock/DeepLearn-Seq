@@ -15,3 +15,5 @@ The other scripts are mainly copied from previos work from https://github.com/ph
 who used GBM to predict the host of a virus
 
 The used training and testing data is compressed in __training_testing_Sets.7z__
+
+<a href="https://zenodo.org/badge/latestdoi/109992570"><img src="https://zenodo.org/badge/109992570.svg" alt="DOI"></a>
