@@ -56,7 +56,7 @@ class SnapshotCallbackBuilder:
         self.M = nb_snapshots
         self.alpha_zero = init_lr
 
-    def get_callbacks(self, model_prefix='Model'):
+    def get_callbacks(self, model_prefix='Model',fn_prefix='weights'):
         """
         Creates a list of callbacks that can be used during training to create a
         snapshot ensemble of the model.
@@ -67,13 +67,13 @@ class SnapshotCallbackBuilder:
         Returns: list of 3 callbacks [ModelCheckpoint, LearningRateScheduler,
                  SnapshotModelCheckpoint] which can be provided to the 'fit' function
         """
-        if not os.path.exists('weights/'):
-            os.makedirs('weights/')
+        if not os.path.exists(fn_prefix+'/'):
+            os.makedirs(fn_prefix+'/')
 
-        callback_list = [callbacks.ModelCheckpoint("weights/%s-Best.h5" % model_prefix, monitor="val_acc",
+        callback_list = [callbacks.ModelCheckpoint(fn_prefix+"/"+model_prefix+"-Best.h5", monitor="val_acc",
                                                     save_best_only=True, save_weights_only=False),
                          # callbacks.LearningRateScheduler(schedule=self._cosine_anneal_schedule),
-                         SnapshotModelCheckpoint(self.T, self.M, fn_prefix='weights/%s' % model_prefix)]
+                         SnapshotModelCheckpoint(self.T, self.M, fn_prefix=fn_prefix + "/" + model_prefix)]
 
         return callback_list
 

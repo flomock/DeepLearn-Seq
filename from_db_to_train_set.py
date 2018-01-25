@@ -26,10 +26,10 @@ from zoo.learn import entropy_select
 # from draw_random import draw_random
 from draw_random import draw_random
 from one_hot_encoding import ohe_matrix
-from shannon import shannon
-from chunk import chunk
-from utils import iter_seq, to_fasta
-from subprocess import call, check_output
+# from shannon import shannon
+# from chunk import chunk
+# from utils import iter_seq, to_fasta
+# from subprocess import call, check_output
 import random
 
 # import datetime
