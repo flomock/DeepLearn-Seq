@@ -18,8 +18,9 @@ from sklearn.utils import class_weight as clw
 # from sklearn.metrics import confusion_matrix
 from sklearn.model_selection import train_test_split
 from keras.utils import to_categorical
-from keras.models import Sequential
-from keras.layers import SimpleRNN, LSTM, Dense, Flatten, Embedding, Dropout, GRU, CuDNNLSTM
+from keras.models import Sequential, Model
+from keras.layers import SimpleRNN, LSTM, Dense, Flatten, Embedding, Dropout, GRU, CuDNNLSTM, BatchNormalization, \
+    Bidirectional, Conv1D, MaxPooling1D, Input, Concatenate
 from keras.models import load_model
 from keras import optimizers
 from sklearn.preprocessing import LabelEncoder
@@ -44,6 +45,7 @@ import matplotlib
 matplotlib.rcParams['backend'] = 'Agg'
 import matplotlib.pyplot as plt
 import plotting_results
+import random
 
 # import matplotlib.mlab as mlab
 # import matplotlib.patches as mpatches
@@ -150,7 +152,7 @@ class prediction_history(keras.callbacks.Callback):
         shuffled_Y = Y_test[p]
         self.predhis = (self.model.predict(shuffled_X[0:10]))
         # y_pred = my_model.predict(X_test)
-        print(self.predhis)
+        # print(self.predhis)
         y_pred = np.argmax(self.predhis, axis=-1)
         y_true = np.argmax(shuffled_Y, axis=-1)[0:10]
         print(y_pred)
@@ -177,7 +179,7 @@ def shrink_timesteps(input_subSeqlength=0):
     :return:
     """
     global X_train, X_test, X_val, Y_train, Y_test, Y_val, batch_size
-
+    print(X_train.max())
     samples = X_train.shape[0]
     seqlength = X_train.shape[1]
     features = X_train.shape[2]
@@ -341,7 +343,7 @@ def use_old_data(one_hot_encoding=True):
     Y_train = one_hot_encode_string(Y_train_old)
 
 
-def use_data_nanocomb(one_hot_encoding=True):
+def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLen = None):
     """
     to use the nanocomb exported data
     """
@@ -350,6 +352,16 @@ def use_data_nanocomb(one_hot_encoding=True):
     Y_test_old = pd.read_csv(directory + '/Y_test.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
     X_train_old = pd.read_csv(directory + '/X_train.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
     X_test_old = pd.read_csv(directory + '/X_test.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
+
+    create_val = False
+
+    try:
+        Y_val_old = pd.read_csv(directory + '/Y_val.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
+        X_val_old = pd.read_csv(directory + '/X_val.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
+        print("loaded validation set from: " + directory + '/Y_val.csv')
+    except:
+        print("create validation set from train")
+        create_val = True
 
     def one_hot_encode_int(data):
 
@@ -364,28 +376,106 @@ def use_data_nanocomb(one_hot_encoding=True):
         encoded_data = encoded_data.reshape((data.shape[0], data.shape[1], num_classes))
         return encoded_data
 
-    def one_hot_encode_string(maxLen=None, x=[], y=[]):
+    def encode_string(maxLen=None, x=[], y=[]):
 
         """
-        One hot encoding
+        One hot encoding for classes
         to convert the "old" exported int data via OHE to binary matrix
         http://machinelearningmastery.com/multi-class-classification-tutorial-keras-deep-learning-library/
+
+        for dna ony to int values
         """
+
+        def pad_n_repeat_sequences(sequences, maxlen=None, dtype='int32',
+                                   padding='pre', truncating='pre', value=0.):
+            """extended version of pad_sequences()"""
+            if not hasattr(sequences, '__len__'):
+                raise ValueError('`sequences` must be iterable.')
+            lengths = []
+            for x in sequences:
+                if not hasattr(x, '__len__'):
+                    raise ValueError('`sequences` must be a list of iterables. '
+                                     'Found non-iterable: ' + str(x))
+                lengths.append(len(x))
+            num_samples = len(sequences)
+            if maxlen is None:
+                maxlen = np.max(lengths)
+
+            # take the sample shape from the first non empty sequence
+            # checking for consistency in the main loop below.
+            sample_shape = tuple()
+            for s in sequences:
+                if len(s) > 0:
+                    sample_shape = np.asarray(s).shape[1:]
+                    break
+
+            # make new array and fill with input seqs
+            x = (np.ones((num_samples, maxlen) + sample_shape) * value).astype(dtype)
+            for idx, s in enumerate(sequences):
+                if not len(s):
+                    continue  # empty list/array was found
+                if truncating == 'pre':
+                    trunc = s[-maxlen:]
+                elif truncating == 'post':
+                    trunc = s[:maxlen]
+                else:
+                    raise ValueError('Truncating type "%s" not understood' % truncating)
+
+                # check `trunc` has expected shape
+                trunc = np.asarray(trunc, dtype=dtype)
+                if trunc.shape[1:] != sample_shape:
+                    raise ValueError(
+                        'Shape of sample %s of sequence at position %s is different from expected shape %s' %
+                        (trunc.shape[1:], idx, sample_shape))
+
+                if padding == 'post':
+                    x[idx, :len(trunc)] = trunc
+                elif padding == 'pre':
+                    x[idx, -len(trunc):] = trunc
+                else:
+                    raise ValueError('Padding type "%s" not understood' % padding)
+
+                if repeat:
+                    # repeat seq multiple times
+                    repeat_seq = np.array([], dtype=dtype)
+                    while len(repeat_seq) < maxLen:
+                        if use_spacer:
+                            spacer_length = random.randint(1, 50)
+                            spacer = [value for i in range(spacer_length)]
+                            repeat_seq = np.append(repeat_seq, spacer)
+                            repeat_seq = np.append(repeat_seq, trunc)
+                        else:
+                            repeat_seq = np.append(repeat_seq, trunc)
+                    x[idx, :] = repeat_seq[-maxLen:]
+
+            return x
+
         encoder = LabelEncoder()
+
         if len(x) > 0:
-            a = "ACGTN"
+            # x = [list(dnaSeq) for dnaSeq in x]
+            # x = pad_sequences(x, maxlen=maxLen, dtype='str', padding='pre', truncating='pre', value="-")
+            # a = "ATGCN-"
+            a = "ATGCN"
             encoder.fit(list(a))
             print(encoder.classes_)
             print(encoder.transform(encoder.classes_))
             out = []
             for i in x:
-                dnaSeq = re.sub(r"[^ACGTacgt]+", 'N', i)
+                dnaSeq = re.sub(r"[^ACGTUacgtu]+", 'N', i)
                 encoded_X = encoder.transform(list(dnaSeq))
                 out.append(encoded_X)
 
             # encoded_Y = encoder.transform(y)
-            out = pad_sequences(out, maxlen=maxLen, dtype='int16', padding='pre', truncating='pre', value=0.)
-            return to_categorical(out).reshape((out.shape[0], out.shape[1], len(a)))
+            # out = pad_sequences(out, maxlen=maxLen, dtype='int16', padding='pre', truncating='pre', value=0)#value=encoder.transform(encoder.classes_)[-1]+1)
+            out = pad_n_repeat_sequences(out, maxlen=maxLen, dtype='int32', truncating='pre', value=0)
+
+            # normalize
+            # out = out / (len(a) - 1)
+
+            # return to_categorical(out).reshape((out.shape[0], out.shape[1], len(a)))
+            return to_categorical(out)
+            # return out.reshape((out.shape[0], out.shape[1], 1))
         else:
             encoder.fit(y)
             print(encoder.classes_)
@@ -394,24 +484,39 @@ def use_data_nanocomb(one_hot_encoding=True):
             return to_categorical(encoded_Y)
 
     if one_hot_encoding:
-        global X_test, X_train, Y_test, Y_train
-        maxLen = 0
-        length = []
-        for X in (X_test_old, X_train_old):
-            for i in X:
-                length.append(len(i))
-        length.sort()
-        maxLen = length[int(len(length) * 0.95)]
-        print(maxLen)
+        global X_test, X_train, X_val, Y_test, Y_train, Y_val
+        if maxLen == None:
+            length = []
+            x_sets = [X_test_old, X_train_old]
+            if create_val == False:
+                x_sets.append(X_val_old)
 
-        X_test = one_hot_encode_string(maxLen, x=X_test_old)
-        X_train = one_hot_encode_string(maxLen, x=X_train_old)
+            for X in x_sets:
+                for i in X:
+                    length.append(len(i))
+            length.sort()
+            # plt.hist(length,bins=500,range=(0,20000))
+            # plt.show()
+            maxLen = length[int(len(length) * 0.95)]
+            print(maxLen)
+
+        X_test = encode_string(maxLen, x=X_test_old)
+        X_train = encode_string(maxLen, x=X_train_old)
+        if create_val == False:
+            X_val = encode_string(maxLen, x=X_val_old)
     else:
         X_test = X_test_old
         X_train = X_train_old
+        if create_val == False:
+            X_val = X_val_old
 
-    Y_test = one_hot_encode_string(y=Y_test_old)
-    Y_train = one_hot_encode_string(y=Y_train_old)
+    Y_test = encode_string(y=Y_test_old)
+    Y_train = encode_string(y=Y_train_old)
+    if create_val:
+        X_train, X_val, Y_train, Y_val = train_test_split(X_train, Y_train, test_size=0.3, random_state=SEED,
+                                                          stratify=Y_train)
+    else:
+        Y_val = encode_string(y=Y_val_old)
 
 
 def filter_train_data(species_to_keep=[1, 2]):
@@ -496,7 +601,7 @@ def baseline_model(design=1, epochs=50, fit=True, decay=False):
 
 def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, dropout=0, timesteps="default",
                    faster=False, path="/home/go96bix/Dropbox/Masterarbeit/ML", voting=False, tensorboard=False,
-                   gpus=False, snapShotEnsemble=False):
+                   gpus=False, snapShotEnsemble=False, shuffleTraining=True, batch_norm=False):
     """
     method to train a model with specified properties, saves training behavior in /$path/"history"+suffix+".csv"
     :param design: parameter for complexity of the NN, 0 == 2 layer GRU, 1 == 2 layer LSTM, 2 == 3 layer LSTM
@@ -518,7 +623,7 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
     if timesteps == "default":
         timesteps = X_train.shape[1]
     if faster:
-        batch = batch_size * 10
+        batch = batch_size * 16
     else:
         batch = batch_size
     # if gpus:
@@ -533,10 +638,80 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
 
     if design == 2:
         model.add(LSTM(nodes, input_shape=(timesteps, X_train.shape[-1]), return_sequences=True, dropout=dropout))
+        if batch_norm:
+            model.add(BatchNormalization())
+        model.add(LSTM(nodes, return_sequences=True, dropout=dropout))
+        if batch_norm:
+            model.add(BatchNormalization())
+        model.add(LSTM(nodes, dropout=dropout))
+        if batch_norm:
+            model.add(BatchNormalization())
+
+    if design == 3:
+        model.add(LSTM(nodes, input_shape=(timesteps, X_train.shape[-1]), return_sequences=True, dropout=dropout))
+        model.add(LSTM(nodes, return_sequences=True, dropout=dropout))
         model.add(LSTM(nodes, return_sequences=True, dropout=dropout))
         model.add(LSTM(nodes, dropout=dropout))
 
-    model.add(Dense(Y_train.shape[-1], activation='softmax'))
+    if design == 4:
+        model.add(Bidirectional(LSTM(nodes, return_sequences=True, dropout=dropout),input_shape=(timesteps, X_train.shape[-1])))
+        model.add(Bidirectional(LSTM(nodes, return_sequences=True, dropout=dropout)))
+        model.add(Bidirectional(LSTM(nodes, dropout=dropout)))
+
+    if design == 5:
+        model.add(Conv1D(nodes,9,input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
+        model.add(MaxPooling1D(3))
+        model.add(Conv1D(nodes, 9, activation='relu'))
+        # model.add(layers.MaxPooling1D(3))
+        model.add(Bidirectional(
+            LSTM(nodes, return_sequences=True, dropout=dropout)))
+        model.add(Bidirectional(LSTM(nodes, dropout=dropout)))
+
+    if design == 6:
+        # This returns a tensor
+        inputs = Input(shape=(timesteps,X_train.shape[-1]))
+
+        left1 = Bidirectional(LSTM(nodes, return_sequences=True, dropout=dropout))(inputs)
+        left2 = Bidirectional(LSTM(nodes, dropout=dropout))(left1)
+
+        right = Conv1D(nodes,9, activation='relu')(inputs)
+        right = MaxPooling1D(3)(right)
+        right = Conv1D(nodes,9, activation='relu')(right)
+        right = MaxPooling1D(3)(right)
+        right3 = Conv1D(nodes, 9, activation='relu')(right)
+        right_flat = Flatten()(right3)
+
+        joined = Concatenate()([left2,right_flat])
+        predictions = Dense(Y_train.shape[-1], activation='softmax')(joined)
+
+        model = Model(inputs=inputs, outputs=predictions)
+
+    if design == 7:
+        model.add(Conv1D(nodes,9,input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
+        model.add(MaxPooling1D(3))
+        model.add(Conv1D(nodes, 9, activation='relu'))
+        model.add(MaxPooling1D(3))
+        model.add(Conv1D(nodes, 9, activation='relu'))
+        # model.add(layers.MaxPooling1D(3))
+        model.add(Bidirectional(
+            LSTM(nodes, return_sequences=True, dropout=dropout, recurrent_dropout=0.5)))
+        model.add(Bidirectional(LSTM(nodes, dropout=dropout, recurrent_dropout=0.5)))
+
+    if design == 8:
+        model.add(Conv1D(nodes,9,input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
+        model.add(MaxPooling1D(3))
+        model.add(Conv1D(nodes, 9, activation='relu'))
+        model.add(MaxPooling1D(3))
+        model.add(Conv1D(nodes, 9, activation='relu'))
+        # model.add(layers.MaxPooling1D(3))
+        model.add(Bidirectional(
+            LSTM(nodes, return_sequences=True, dropout=dropout, recurrent_dropout=0.2)))
+        model.add(Bidirectional(LSTM(nodes, return_sequences=True, dropout=dropout, recurrent_dropout=0.2)))
+        model.add(Bidirectional(LSTM(nodes, dropout=dropout, recurrent_dropout=0.2)))
+
+    if design != 6:
+        model.add(Dense(Y_train.shape[-1], activation='softmax'))
+
     model.summary()
     # adam = optimizers.Adam(lr=0.00005, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
     # model.compile(optimizer=adam, loss='categorical_crossentropy', metrics=['acc'])
@@ -554,7 +729,8 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
 
     model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['acc'])
     filepath = directory + "/weights.best." + suffix + ".hdf5"
-    checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+    # checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
+    checkpoint = ModelCheckpoint(filepath, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
     predictions = prediction_history()
     time_callback = TimeHistory()
 
@@ -566,7 +742,7 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
         nb_snapshots = 5
         snapshot = SnapshotCallbackBuilder(epochs, nb_snapshots, 0.1)
         lr_manipulation = lrManipulator(nb_epochs=epochs, nb_snapshots=nb_snapshots)
-        callbacks_list.extend(snapshot.get_callbacks(model_prefix=suffix+"Model", fn_prefix=path+"/weights"))
+        callbacks_list.extend(snapshot.get_callbacks(model_prefix=suffix + "Model", fn_prefix=path + "/weights"))
         callbacks_list.append(lr_manipulation)
 
     if tensorboard:
@@ -593,7 +769,7 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
 
     hist = model.fit(X_train[0:int(len(X_train) / sampleSize)], Y_train[0:int(len(X_train) / sampleSize)],
                      epochs=epochs, batch_size=batch, callbacks=callbacks_list,
-                     validation_data=(X_val, Y_val), class_weight=class_weight)
+                     validation_data=(X_val, Y_val), class_weight=class_weight, shuffle=shuffleTraining)
     times = time_callback.times
     if voting:
         acc_votes = myAccuracy.normalVote_train
@@ -642,8 +818,10 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
             rownames=['True'],
             colnames=['Predicted'],
             margins=True)
+        print("standard version")
         print(table)
         accuracy = metrics.accuracy_score(y_true, y_pred) * 100
+        print("standard version")
         print("acc = " + str(accuracy))
         table = pd.crosstab(
             pd.Series(y_true_small),
@@ -651,8 +829,10 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
             rownames=['True'],
             colnames=['Predicted'],
             margins=True)
+        print("vote version")
         print(table)
         accuracy = metrics.accuracy_score(y_true_small, y_pred_voted) * 100
+        print("vote version")
         print("acc = " + str(accuracy))
         table = pd.crosstab(
             pd.Series(y_true_small),
@@ -660,8 +840,10 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
             rownames=['True'],
             colnames=['Predicted'],
             margins=True)
+        print("mean version")
         print(table)
         accuracy = metrics.accuracy_score(y_true_small, y_pred_sum) * 100
+        print("mean version")
         print("acc = " + str(accuracy))
 
     if len(y_pred) == 0:
@@ -689,6 +871,7 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
         y_pred_voted.append(np.random.permutation(best)[0])
 
         # y_pred_voted.append(np.argmax(np.array(np.bincount(y_pred[i * batch_size:i*batch_size+batch_size]))))
+        # print(np.bincount(y_true[i * batch_size:i * batch_size + batch_size]))
         y_true_small.append(np.argmax(np.array(np.bincount(y_true[i * batch_size:i * batch_size + batch_size]))))
 
     if do_print:
@@ -778,7 +961,7 @@ def snap_Shot_ensemble(M=5, nb_epoch=100, alpha_zero=0.1, model_prefix='Model_',
                              header=False)
 
 
-def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc_weight=False, weights=[], mean = True):
+def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc_weight=False, weights=[], mean=True):
     """
     loads models and returns prediction weights or prints the accuracy reached with predefined weights
     :param nb_classes: how many different classes/labels exist
@@ -832,7 +1015,8 @@ def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc
             print('Best Ensemble Weights: {weights}'.format(weights=result['x']))
             weights = result['x']
             foo.append(weights)
-            y_true_small, y_true, y_pred_mean, y_pred_voted, y_pred = calculate_weighted_accuracy(weights, preds, nb_classes,X=X, Y=Y)
+            y_true_small, y_true, y_pred_mean, y_pred_voted, y_pred = calculate_weighted_accuracy(weights, preds,
+                                                                                                  nb_classes, X=X, Y=Y)
 
             if mean:
                 accuracy = metrics.accuracy_score(y_true_small, y_pred_mean) * 100
@@ -917,106 +1101,50 @@ def run_tests_for_plotting():
     setups for some of the tests from the masterthesis
     :return:
     """
-    # model_for_plot(knots=16, epochs=50,suffix="influ-nodes-runtime-2")
-    # model_for_plot(knots=32, epochs=50,suffix="influ-nodes-runtime-2")
-    model_for_plot(nodes=64, epochs=50, suffix="influ-nodes-runtime-2_64nodes")
-    # model_for_plot(knots=100, epochs=50,suffix="influ-nodes-runtime-2")
-    exit()
-    model_for_plot(suffix="MultiV_Dropout_02", epochs=25, dropout=0.2, faster=True)
-    exit()
-    # global batch_size
-    # use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=13)
-    # batch_size = 1
-    model_for_plot(suffix="Influ_seqlength_batch1_Time1-vote", epochs=50)
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=25)
-    # batch_size = 1
-    model_for_plot(suffix="Influ_seqlength_batch1_Time1-vote", epochs=50)
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=100)
-    # batch_size = 1
-    model_for_plot(suffix="Influ_seqlength_batch1_Time1-vote", epochs=50)
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=1000)
-    # batch_size = 1
-    model_for_plot(suffix="Influ_seqlength_batch1_Time1-vote", epochs=50)
-    # model_for_plot(design=2, suffix="oversampling",epochs=200)
-    # use_old_data(one_hot_encoding=True)
-    # shrink_timesteps()
-    # model_for_plot(suffix="historyInflu_OnOff_Timesteps", epochs=50, timesteps=None)
-    # model_for_plot(suffix="historyInflu_OnOff_Timesteps", epochs=50)
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="baseline_design2",
+    #               do_shrink_timesteps=False, design=2, nodes=100, faster=True, titel="Accuracy no repeat",
+    #               accuracy=True, epochs=50, repeat=False, batch_norm=False)
     #
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design1_spacer-repeat",
+    #               do_shrink_timesteps=False, design=1, nodes=100, faster=True, titel="Accuracy with spacer-repeat",
+    #               accuracy=True, epochs=50, repeat=True, use_repeat_spacer=True, batch_norm=False)
+    #
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design1_normal-repeat",
+    #               do_shrink_timesteps=False, design=1, nodes=100, faster=True, titel="Accuracy with normal-repeat",
+    #               accuracy=True, epochs=50, repeat=True, use_repeat_spacer=False, batch_norm=False)
+    #
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design1_normal-repeat-TBTT",
+    #               do_shrink_timesteps=True, design=1, nodes=100, faster=False, titel="Accuracy with normal-repeat and TBTT",
+    #               accuracy=True, epochs=50, repeat=True, use_repeat_spacer=False, batch_norm=False)
+    #
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design4_baseline",
+    #               do_shrink_timesteps=False, design=4, nodes=100, faster=True,
+    #               titel="Accuracy BiDir LSTM",
+    #               accuracy=True, epochs=50, repeat=False, use_repeat_spacer=False, batch_norm=False)
+    #
+    test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design4_emanuel",
+                  do_shrink_timesteps=True,voting=False, design=4, nodes=100, faster=True,
+                  titel="Accuracy BiDir LSTM normal-repeat and TBTT",
+                  accuracy=True, epochs=15, repeat=True, use_repeat_spacer=False, batch_norm=False)
+    #
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design7",
+    #               do_shrink_timesteps=False, design=7, nodes=100, faster=True,
+    #               titel="Accuracy 3 layer Conv1D & LSTM",
+    #               accuracy=True, epochs=50, repeat=False, use_repeat_spacer=False, batch_norm=False,dropout=0.1)
 
-    exit()
-    model_for_plot(suffix="Flavi_OnOff_Timesteps2", epochs=50, timesteps=None)
-    model_for_plot(suffix="Flavi_OnOff_Timesteps2", epochs=50)
-    exit()
-    model_for_plot(suffix="MultiV_timesteps_epicBatch_bigSet", epochs=25, faster=True)
-    exit()
-    # amount knots
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=100)
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design8_long-run",
+    #               do_shrink_timesteps=False, design=8, nodes=100, faster=True,
+    #               titel="Accuracy 3 layer Conv1D & 3 layer LSTM",
+    #               accuracy=True, epochs=150, repeat=False, use_repeat_spacer=False, batch_norm=False,dropout=0.1)
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design6_short_training",
+    #               do_shrink_timesteps=False, design=6, nodes=100, faster=True,
+    #               titel="Accuracy left LSTM und Conv1D",accuracy=True, epochs=10, repeat=False, use_repeat_spacer=False,
+    #               batch_norm=False)
 
-    model_for_plot(nodes=16, suffix="nodes-runtime")
-    model_for_plot(nodes=32, suffix="nodes-runtime")
-    model_for_plot(nodes=64, suffix="nodes-runtime")
-    model_for_plot(nodes=100, suffix="nodes-runtime")
-
-    # design 2
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps()
-    model_for_plot(design=0, suffix="Design-runtime")
-    model_for_plot(design=1, suffix="Design-runtime")
-    model_for_plot(design=2, suffix="Design-runtime")
-
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=25)
-    model_for_plot(suffix="Timestep-runtime")
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=100)
-    model_for_plot(suffix="Timestep-runtime")
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=400)
-    model_for_plot(suffix="Timestep-runtime")
-    # use_old_data(one_hot_encoding=True)
-    # shrink_timesteps(input_subSeqlength=100)
-    # model_for_plot(suffix="Timestep-runtime")
-    exit()
-    # amount samples
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps()
-
-    model_for_plot(sampleSize=1, suffix="SamplesSize")
-    model_for_plot(sampleSize=4, suffix="SamplesSize")
-    model_for_plot(sampleSize=16, suffix="SamplesSize")
-    model_for_plot(sampleSize=64, suffix="SamplesSize")
-
-    # design
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps()
-    model_for_plot(design=0, suffix="Design")
-    model_for_plot(design=1, suffix="Design")
-    model_for_plot(design=2, suffix="Design")
-
-    # plot different timesteps 1
-
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=13)
-    model_for_plot(suffix="Timestep")
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=21)
-    model_for_plot(suffix="Timestep")
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=50)
-    model_for_plot(suffix="Timestep")
-    use_old_data(one_hot_encoding=True)
-    shrink_timesteps(input_subSeqlength=100)
-    model_for_plot(suffix="Timestep")
-
-
-def test_and_plot(path, suffix, filter_trainset=False, use_old_dataset=False, do_shrink_timesteps=True,
-                  one_hot_encoding=True, val_size=0.3, input_subSeqlength=0, design=1, sampleSize=1, nodes=32,
+def test_and_plot(path, suffix, batch_norm=False, filter_trainset=False, use_old_dataset=False,
+                  do_shrink_timesteps=True,
+                  one_hot_encoding=True, repeat=True, use_repeat_spacer=False, val_size=0.3, input_subSeqlength=0,
+                  design=1, sampleSize=1, nodes=32,
                   snapShotEnsemble=False, epochs=100, dropout=0, timesteps="default", faster=False,
                   voting=False, tensorboard=False, gpus=False, titel='', x_axes='', y_axes='', accuracy=False,
                   loss=False, runtime=False, label1='', label2='', label3='', label4=''):
@@ -1029,13 +1157,19 @@ def test_and_plot(path, suffix, filter_trainset=False, use_old_dataset=False, do
     :return:
     """
     # GET SETTINGS AND PREPARE DATA
-    global X_train, X_test, X_val, Y_train, Y_test, Y_val, batch_size, SEED
+    global X_train, X_test, X_val, Y_train, Y_test, Y_val, batch_size, SEED, directory
     if use_old_dataset:
         use_old_data(one_hot_encoding=one_hot_encoding)
     else:
-        use_data_nanocomb()
-    X_train, X_val, Y_train, Y_val = train_test_split(X_train, Y_train, test_size=val_size, random_state=SEED,
+        use_data_nanocomb(one_hot_encoding=one_hot_encoding, repeat=repeat, use_spacer=use_repeat_spacer)
+
+    if len(X_val)==0:
+        print("make new val set")
+        X_train, X_val, Y_train, Y_val = train_test_split(X_train, Y_train, test_size=val_size, random_state=SEED,
                                                       stratify=Y_train)
+    else:
+        print("val set already exits")
+
     if do_shrink_timesteps:
         if input_subSeqlength:
             shrink_timesteps(input_subSeqlength)
@@ -1055,14 +1189,16 @@ def test_and_plot(path, suffix, filter_trainset=False, use_old_dataset=False, do
         else:
             file.write('(\'batchsize\', ' + str(batch_size) + ')\n')
         file.write('(\'SEED\', ' + str(SEED) + ')\n')
+        file.write('(\'directory\', ' + str(directory) + ')\n')
 
     # START TRAINING
 
     model_for_plot(design=design, sampleSize=sampleSize, nodes=nodes, suffix=suffix, epochs=epochs, dropout=dropout,
                    timesteps=timesteps, faster=faster, path=path, voting=voting, tensorboard=tensorboard, gpus=gpus,
-                   snapShotEnsemble=snapShotEnsemble)
+                   snapShotEnsemble=snapShotEnsemble, shuffleTraining=not do_shrink_timesteps, batch_norm=batch_norm)
 
-    plotting_results.plotting_history(path=path, file="history" + suffix + ".csv", titel=titel, x_axes=x_axes, y_axes=y_axes,
+    plotting_results.plotting_history(path=path, file="history" + suffix + ".csv", titel=titel, x_axes=x_axes,
+                                      y_axes=y_axes,
                                       accuracy=accuracy, loss=loss, voting=voting, runtime=runtime, label1=label1,
                                       label2=label2, label3=label3, label4=label4)
 
@@ -1080,28 +1216,26 @@ if __name__ == '__main__':
     new_model = False
     filter_trainset = False
     use_old_dataset = False
-    do_shrink_timesteps = False
-    batch_size = 10  # X_train.shape[0]
+    do_shrink_timesteps = True
+    batch_size = 5  # X_train.shape[0]
 
     """define the folder where to find the training/testing data"""
-    suffix = 'nanocomb'
+    suffix = '100Samples'
 
-    directory = '/home/go96bix/projects/nanocomb/' + suffix
+    directory = '/home/go96bix/projects/nanocomb/nanocomb/' + suffix
 
     if use_old_dataset:
         use_old_data(one_hot_encoding=True)
     else:
         use_data_nanocomb()
     #
-    X_train, X_val, Y_train, Y_val = train_test_split(X_train, Y_train, test_size=0.3, random_state=SEED,
-                                                      stratify=Y_train)
 
     if do_shrink_timesteps:
         shrink_timesteps()  # input_subSeqlength=1000)
-    #
-    # """to limit the training on specified classes/hosts"""
-    # if filter_trainset:
-    #     filter_train_data()
+
+    """to limit the training on specified classes/hosts"""
+    if filter_trainset:
+        filter_train_data()
 
     """if interested in cross validation"""
     # classic
@@ -1119,27 +1253,34 @@ if __name__ == '__main__':
     #     weights = [] # hier ueberlegen wie ich random weights init und dann alte wiederverwendet als init fuer naechste model
     #     model = baseline_model(epochs=5,fit=False)
     #     model.fit(model.fit(X_train, Y_train, epochs=epochs, batch_size=batch_size, callbacks=callbacks_list,validation_data=(X_test, Y_test)))
-    weights = prediction_from_Ensemble(51,X_val,Y_val,dir="/home/go96bix/projects/nanocomb/nanocomb/plots/weights/complex/",calc_weight=True, mean=False)
-    prediction_from_Ensemble(51,X_test,Y_test,weights=weights,dir="/home/go96bix/projects/nanocomb/nanocomb/plots/weights/complex/")
-    # print(weights)
-    exit()
-    test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="100_samples_snap_wide", snapShotEnsemble=True,
-                  do_shrink_timesteps=False, design=1, nodes=150, faster=True, titel="Accuracy of Snapshot Ensemble + 10% Dropout",
-                  accuracy=True, epochs=100, dropout=0.1)
-    exit()
-    model_for_plot(voting=False, suffix="nanocomb_test_100samples_len10000_noVote_Design2", epochs=100, faster=True,
-                   nodes=64, path='/home/go96bix/projects/nanocomb/nanocomb/plots', tensorboard=False, design=2)
-    # # # snap_Shot_ensemble(nb_epoch=100,M=5,model_prefix="Flavi_m                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           yVersion")
-    # #
-    exit()
-    model = load_model(
-        "/home/go96bix/Dropbox/Masterarbeit/data/machineLearning/2017-09-28T15:48:01.279412/weights.best.Species_timesteps_hugeBatch.hdf5")
-    pred = model.predict(X_test)
-    y_true_small, y_pred_mean, y_pred_voted, y_pred, y_pred_mean_exact = calc_predictions(X_test, Y_test, y_pred=pred)
-    # pred = np.argmax(pred, axis=-1)
-    # print(Y_test)
-    # print(pred)
+    # weights = prediction_from_Ensemble(51,X_val,Y_val,dir="/home/go96bix/projects/nanocomb/nanocomb/plots/weights/complex/",calc_weight=True, mean=False)
+    # prediction_from_Ensemble(51,X_test,Y_test,weights=weights,dir="/home/go96bix/projects/nanocomb/nanocomb/plots/weights/complex/")
+    # # print(weights)
 
+    # run_tests_for_plotting()
+    # exit()
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="long_bigNN_test", snapShotEnsemble=False,
+    #               do_shrink_timesteps=False, design=3, nodes=100, faster=True, titel="Accuracy (n-1 Ebola-set)",
+    #               accuracy=True, epochs=150,repeat=False)#, dropout=0.1)
+    # exit()
+    # model_for_plot(voting=False, suffix="nanocomb_test_100samples_len10000_noVote_Design2", epochs=100, faster=True,
+    #                nodes=64, path='/home/go96bix/projects/nanocomb/nanocomb/plots', tensorboard=False, design=2)
+    # # # # snap_Shot_ensemble(nb_epoch=100,M=5,model_prefix="Flavi_m                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           yVersion")
+    # # #
+    # exit()
+    model = load_model(
+        "/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5")
+    pred = model.predict(X_test)
+    # np.savetxt('/home/go96bix/projects/nanocomb/nanocomb/pred_vector_train.csv', pred, fmt='%s', delimiter=',')
+    # exit()
+    # score, acc = model.evaluate(X_test, Y_test, verbose=0)
+    # print('Test accuracy:', acc)
+    y_true_small, y_pred_mean, y_pred_voted, y_pred, y_pred_mean_exact = calc_predictions(X_test, Y_test, y_pred=pred,
+                                                                                          do_print=True)
+    # pred = np.argmax(pred, axis=-1)
+    print(Y_test)
+    # print(pred)
+    exit()
     species = ['Homo sapiens', 'Macaca', 'Rousettus']
     plot_histogram(pred, Y_train, species)
     plot_histogram(y_pred_mean_exact, np.array(y_true_small), species)

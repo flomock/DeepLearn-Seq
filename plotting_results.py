@@ -130,3 +130,4 @@ def plotting_history(path, file, titel, x_axes='', y_axes='', accuracy=False, lo
 #
 # plotting_history(path, file, accuracy=True, loss=True, runtime=False, label1="test", voting=True,
 #                  titel='Accuracy with different Sample sizes')
+# plotting_history(path="/home/go96bix/projects/nanocomb/nanocomb/plots/", file='historydesign1_normal-repeat.csv', titel="Accuracy old architecture", accuracy=True)
