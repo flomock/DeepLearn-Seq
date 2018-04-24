@@ -39,6 +39,7 @@ from snapshot import SnapshotCallbackBuilder
 import sklearn.metrics as metrics
 from sklearn.metrics import log_loss
 from scipy.optimize import minimize
+import scipy.stats
 import time
 import matplotlib
 
@@ -113,8 +114,11 @@ class accuracyHistory(keras.callbacks.Callback):
         self.meanVote_train = []
         self.normalVote_train = []
 
-        self.meanVote_test = []
-        self.normalVote_test = []
+        self.meanVote_val = []
+        self.normalVote_val = []
+
+        # self.meanVote_test = []
+        # self.normalVote_test = []
 
     # def on_epoch_begin(self, batch, logs={}):
     #     self.epoch_time_start = datetime.time()
@@ -132,11 +136,17 @@ class accuracyHistory(keras.callbacks.Callback):
         self.normalVote_train.append(metrics.accuracy_score(y_true_small, y_pred_voted_train))
         self.meanVote_train.append(metrics.accuracy_score(y_true_small, y_pred_mean_train))
 
-        self.prediction_test = (self.model.predict(X_test))
-        y_true_small, y_pred_mean_test, y_pred_voted_test, y_pred, y_pred_mean_exact = \
-            calc_predictions(X_test, Y_test, do_print=False, y_pred=self.prediction_test)
-        self.normalVote_test.append(metrics.accuracy_score(y_true_small, y_pred_voted_test))
-        self.meanVote_test.append(metrics.accuracy_score(y_true_small, y_pred_mean_test))
+        self.prediction_val = (self.model.predict(X_val))
+        y_true_small, y_pred_mean_val, y_pred_voted_val, y_pred, y_pred_mean_exact = \
+            calc_predictions(X_val, Y_val, do_print=False, y_pred=self.prediction_val)
+        self.normalVote_val.append(metrics.accuracy_score(y_true_small, y_pred_voted_val))
+        self.meanVote_val.append(metrics.accuracy_score(y_true_small, y_pred_mean_val))
+
+    # self.prediction_test = (self.model.predict(X_test))
+    # y_true_small, y_pred_mean_test, y_pred_voted_test, y_pred, y_pred_mean_exact = \
+    #     calc_predictions(X_test, Y_test, do_print=False, y_pred=self.prediction_test)
+    # self.normalVote_test.append(metrics.accuracy_score(y_true_small, y_pred_voted_test))
+    # self.meanVote_test.append(metrics.accuracy_score(y_true_small, y_pred_mean_test))
 
 
 class prediction_history(keras.callbacks.Callback):
@@ -343,7 +353,7 @@ def use_old_data(one_hot_encoding=True):
     Y_train = one_hot_encode_string(Y_train_old)
 
 
-def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLen = None):
+def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLen=None):
     """
     to use the nanocomb exported data
     """
@@ -367,7 +377,6 @@ def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLe
 
         """
         One hot encoding
-        to convert the "old" exported int data via OHE to binary matrix
         http://machinelearningmastery.com/how-to-one-hot-encode-sequence-data-in-python/
         """
 
@@ -654,12 +663,13 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
         model.add(LSTM(nodes, dropout=dropout))
 
     if design == 4:
-        model.add(Bidirectional(LSTM(nodes, return_sequences=True, dropout=dropout),input_shape=(timesteps, X_train.shape[-1])))
+        model.add(Bidirectional(LSTM(nodes, return_sequences=True, dropout=dropout),
+                                input_shape=(timesteps, X_train.shape[-1])))
         model.add(Bidirectional(LSTM(nodes, return_sequences=True, dropout=dropout)))
         model.add(Bidirectional(LSTM(nodes, dropout=dropout)))
 
     if design == 5:
-        model.add(Conv1D(nodes,9,input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
+        model.add(Conv1D(nodes, 9, input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
         model.add(MaxPooling1D(3))
         model.add(Conv1D(nodes, 9, activation='relu'))
         # model.add(layers.MaxPooling1D(3))
@@ -669,25 +679,25 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
 
     if design == 6:
         # This returns a tensor
-        inputs = Input(shape=(timesteps,X_train.shape[-1]))
+        inputs = Input(shape=(timesteps, X_train.shape[-1]))
 
         left1 = Bidirectional(LSTM(nodes, return_sequences=True, dropout=dropout))(inputs)
         left2 = Bidirectional(LSTM(nodes, dropout=dropout))(left1)
 
-        right = Conv1D(nodes,9, activation='relu')(inputs)
+        right = Conv1D(nodes, 9, activation='relu')(inputs)
         right = MaxPooling1D(3)(right)
-        right = Conv1D(nodes,9, activation='relu')(right)
+        right = Conv1D(nodes, 9, activation='relu')(right)
         right = MaxPooling1D(3)(right)
         right3 = Conv1D(nodes, 9, activation='relu')(right)
         right_flat = Flatten()(right3)
 
-        joined = Concatenate()([left2,right_flat])
+        joined = Concatenate()([left2, right_flat])
         predictions = Dense(Y_train.shape[-1], activation='softmax')(joined)
 
         model = Model(inputs=inputs, outputs=predictions)
 
     if design == 7:
-        model.add(Conv1D(nodes,9,input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
+        model.add(Conv1D(nodes, 9, input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
         model.add(MaxPooling1D(3))
         model.add(Conv1D(nodes, 9, activation='relu'))
         model.add(MaxPooling1D(3))
@@ -698,7 +708,7 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
         model.add(Bidirectional(LSTM(nodes, dropout=dropout, recurrent_dropout=0.5)))
 
     if design == 8:
-        model.add(Conv1D(nodes,9,input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
+        model.add(Conv1D(nodes, 9, input_shape=(timesteps, X_train.shape[-1]), activation='relu'))
         model.add(MaxPooling1D(3))
         model.add(Conv1D(nodes, 9, activation='relu'))
         model.add(MaxPooling1D(3))
@@ -774,8 +784,8 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
     if voting:
         acc_votes = myAccuracy.normalVote_train
         acc_means = myAccuracy.meanVote_train
-        val_acc_votes = myAccuracy.normalVote_test
-        val_acc_means = myAccuracy.meanVote_test
+        val_acc_votes = myAccuracy.normalVote_val
+        val_acc_means = myAccuracy.meanVote_val
 
     if not os.path.isfile(path + "/history" + suffix + ".csv"):
         histDataframe = pd.DataFrame(hist.history)
@@ -801,7 +811,7 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
     return {'loss': -acc, 'model': model}
 
 
-def calc_predictions(X, Y, do_print=False, y_pred=[]):
+def calc_predictions(X, Y, y_pred, do_print=False):
     """
     plot predictions
     :param X: raw-data which should be predicted
@@ -811,7 +821,8 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
     :return: y_true_small == True labels for complete sequences, yTrue == True labels for complete subsequences, y_pred_mean == with mean predicted labels for complete sequences, y_pred_voted == voted labels for complete sequences, y_pred == predicted labels for complete subsequences
     """
 
-    def print_predictions(y_true, y_pred, y_true_small, y_pred_voted, y_pred_sum):
+    def print_predictions(y_true, y_pred, y_true_small, y_pred_voted, y_pred_sum, y_pred_mean_weight_std,
+                          y_pred_mean_weight_ent):
         table = pd.crosstab(
             pd.Series(y_true),
             pd.Series(y_pred),
@@ -823,6 +834,7 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
         accuracy = metrics.accuracy_score(y_true, y_pred) * 100
         print("standard version")
         print("acc = " + str(accuracy))
+
         table = pd.crosstab(
             pd.Series(y_true_small),
             pd.Series(y_pred_voted),
@@ -834,6 +846,7 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
         accuracy = metrics.accuracy_score(y_true_small, y_pred_voted) * 100
         print("vote version")
         print("acc = " + str(accuracy))
+
         table = pd.crosstab(
             pd.Series(y_true_small),
             pd.Series(y_pred_sum),
@@ -846,17 +859,64 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
         print("mean version")
         print("acc = " + str(accuracy))
 
-    if len(y_pred) == 0:
-        y_pred = my_model.predict(X)
+        table = pd.crosstab(
+            pd.Series(y_true_small),
+            pd.Series(y_pred_mean_weight_ent),
+            rownames=['True'],
+            colnames=['Predicted'],
+            margins=True)
+        print("entropie version")
+        print(table)
+        accuracy = metrics.accuracy_score(y_true_small, y_pred_mean_weight_ent) * 100
+        print("entropie version")
+        print("acc = " + str(accuracy))
+
+        table = pd.crosstab(
+            pd.Series(y_true_small),
+            pd.Series(y_pred_sum),
+            rownames=['True'],
+            colnames=['Predicted'],
+            margins=True)
+        print("std version")
+        print(table)
+        accuracy = metrics.accuracy_score(y_true_small, y_pred_mean_weight_std) * 100
+        print("std version")
+        print("acc = " + str(accuracy))
 
     # for addition of probability and not voting
     y_pred_mean = []
     y_pred_mean_exact = []
+    weigth_entropy = []
+    y_pred_mean_weight_ent = []
+    weigth_std = []
+    y_pred_mean_weight_std = []
+
+    for i in y_pred:
+        # standard distribution of values
+        weigth_std.append(np.std(i))
+        # weigth_std.append(np.std(i)**5)
+        # weigth_std.append(np.var(i))
+
+        # entropie if this values corresbond to a normal distribution
+        weigth_entropy.append(scipy.stats.entropy(scipy.stats.norm.pdf(i, loc=0.5, scale=0.25)))
 
     for i in range(0, int(len(y_pred) / batch_size)):
-        foo_pred = np.array(np.sum(y_pred[i * batch_size:i * batch_size + batch_size], axis=0) / batch_size)
-        y_pred_mean.append(np.argmax(foo_pred))
-        y_pred_mean_exact.append(foo_pred)
+        sample_pred_mean = np.array(np.sum(y_pred[i * batch_size:i * batch_size + batch_size], axis=0) / batch_size)
+        y_pred_mean.append(np.argmax(sample_pred_mean))
+        y_pred_mean_exact.append(sample_pred_mean)
+
+        sample_weigths = weigth_entropy[i * batch_size:i * batch_size + batch_size]
+        sw_normalized = np.array(sample_weigths / np.sum(sample_weigths)).reshape(-1, 1)
+        # add entropy weighted prediction
+        y_pred_mean_weight_ent.append(np.argmax(np.array(
+            np.sum(np.array(y_pred[i * batch_size:i * batch_size + batch_size]) * sw_normalized, axis=0) / batch_size)))
+
+        sample_weigths = weigth_std[i * batch_size:i * batch_size + batch_size]
+        sw_normalized = np.array(sample_weigths / np.sum(sample_weigths)).reshape(-1, 1)
+        # add standard deviation weighted prediction
+        y_pred_mean_weight_std.append(np.argmax(np.array(
+            np.sum(np.array(y_pred[i * batch_size:i * batch_size + batch_size]) * sw_normalized, axis=0) / batch_size)))
+
         # print(y_pred[i * batch_size:i * batch_size + batch_size])
     # standard respond
     y_pred = np.argmax(y_pred, axis=-1)
@@ -875,7 +935,8 @@ def calc_predictions(X, Y, do_print=False, y_pred=[]):
         y_true_small.append(np.argmax(np.array(np.bincount(y_true[i * batch_size:i * batch_size + batch_size]))))
 
     if do_print:
-        print_predictions(y_true, y_pred, y_true_small, y_pred_voted, y_pred_mean)
+        print_predictions(y_true, y_pred, y_true_small, y_pred_voted, y_pred_mean, y_pred_mean_weight_std,
+                          y_pred_mean_weight_ent)
     return y_true_small, y_pred_mean, y_pred_voted, y_pred, np.array(y_pred_mean_exact)
 
 
@@ -939,8 +1000,8 @@ def snap_Shot_ensemble(M=5, nb_epoch=100, alpha_zero=0.1, model_prefix='Model_',
     times = time_callback.times
     acc_votes = myAccuracy.normalVote_train
     acc_means = myAccuracy.meanVote_train
-    val_acc_votes = myAccuracy.normalVote_test
-    val_acc_means = myAccuracy.meanVote_test
+    val_acc_votes = myAccuracy.normalVote_val
+    val_acc_means = myAccuracy.meanVote_val
 
     if not os.path.isfile(path + "/history" + model_prefix + ".csv"):
         histDataframe = pd.DataFrame(hist.history)
@@ -961,7 +1022,8 @@ def snap_Shot_ensemble(M=5, nb_epoch=100, alpha_zero=0.1, model_prefix='Model_',
                              header=False)
 
 
-def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc_weight=False, weights=[], mean=True):
+def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc_weight=False, weights=[], mean=True,
+                             multiBatch=False):
     """
     loads models and returns prediction weights or prints the accuracy reached with predefined weights
     :param nb_classes: how many different classes/labels exist
@@ -990,12 +1052,15 @@ def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc
             ''' scipy minimize will pass the weights as a numpy array
             https://github.com/titu1994/Snapshot-Ensembles/blob/master/optimize_cifar100.ipynb
             '''
-            final_prediction = np.zeros((X.shape[0], nb_classes), dtype='float32')
+            if multiBatch:
+                final_prediction = np.zeros((X.shape[1], nb_classes), dtype='float32')
+            else:
+                final_prediction = np.zeros((X.shape[0], nb_classes), dtype='float32')
 
             for weight, prediction in zip(weights, preds):
                 final_prediction += weight * prediction
 
-            return log_loss(Y, final_prediction)
+            return log_loss(np.argmax(Y, axis=-1), final_prediction)
 
         best_acc = 0.0
         best_weights = None
@@ -1016,7 +1081,8 @@ def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc
             weights = result['x']
             foo.append(weights)
             y_true_small, y_true, y_pred_mean, y_pred_voted, y_pred = calculate_weighted_accuracy(weights, preds,
-                                                                                                  nb_classes, X=X, Y=Y)
+                                                                                                  nb_classes, X=X, Y=Y,
+                                                                                                  multiBatch=multiBatch)
 
             if mean:
                 accuracy = metrics.accuracy_score(y_true_small, y_pred_mean) * 100
@@ -1039,38 +1105,72 @@ def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc
 
     models_filenames = []
 
-    for file in sorted(os.listdir(dir)):
-        if not file.endswith("Best.h5") and file.endswith(".h5"):
-            print(file)
-            models_filenames.append(os.path.join(dir, file))
+    if os.path.isfile(dir):
+        models_filenames.append(dir)
+    else:
+        for file in sorted(os.listdir(dir)):
+            if not file.endswith("Best.h5") and file.endswith(".h5"):
+                print(file)
+                models_filenames.append(os.path.join(dir, file))
+
+    if len(models_filenames) > 1:
+        assert multiBatch != True, f"if multibatch == True, only use one model, you try to use: {models_filenames}"
+    if len(models_filenames) == 1:
+        assert multiBatch == True, f"if multibatch == False, use more than one model, you try to use: {models_filenames}"
 
     use_data_nanocomb(one_hot_encoding=True)
     # use_old_data(one_hot_encoding=True)
-    # shrink_timesteps()
-    batch_size = 100
-    # model = baseline_model(fit=False)
+    shrink_timesteps()
+    # batch_size = 100
 
     preds = []
+    yPreds = []
+
     for fn in models_filenames:
+        print("load model and predict")
         model = load_model(fn)
         # model.load_weights(fn)
         yPreds = model.predict(X, batch_size=batch_size)
         preds.append(yPreds)
 
+    y_true_small, y_pred_mean, y_pred_voted, y_pred, y_pred_mean_exact = calc_predictions(X, Y, do_print=True,
+                                                                                          y_pred=yPreds)
+
+    if multiBatch:
+        models_filenames = []
+        X_reorder = []
+        single_SubS = []
+        Y_reorder = []
+        preds = []
+        for i in range(batch_size):
+            for k in range(yPreds.shape[0] // batch_size):
+                preds.append(yPreds[k * batch_size + i])
+                single_SubS.append(X[k * batch_size + i])
+                if i == 0:
+                    Y_reorder.append(Y[k * batch_size + i])
+            X_reorder.append(single_SubS)
+            single_SubS = []
+            models_filenames.append(f"SubSam {i}")
+
+        X = np.array(X_reorder)
+        Y = Y_reorder
+        print(np.array(preds).size)
+        preds = np.array(preds).reshape((batch_size, (np.array(preds).size // nb_classes) // batch_size, nb_classes))
+
     prediction_weights = [1. / len(models_filenames)] * len(models_filenames)
-    calculate_weighted_accuracy(prediction_weights, preds, nb_classes, X=X, Y=Y)
+
+    calculate_weighted_accuracy(prediction_weights, preds, nb_classes, X=X, Y=Y, multiBatch=multiBatch)
 
     if calc_weight == True:
         best_weights = weighted_ensemble(preds, nb_classes, nb_models=len(models_filenames), X=X, Y=Y)
         return best_weights
     elif len(weights) > 0:
         calculate_weighted_accuracy(weights, preds, nb_classes, X=X, Y=Y)
-
     else:
         return prediction_weights
 
 
-def calculate_weighted_accuracy(prediction_weights, preds, nb_classes, X, Y):
+def calculate_weighted_accuracy(prediction_weights, preds, nb_classes, X, Y, multiBatch=True):
     """
     equally weighted model prediction accuracy
     :param prediction_weights: array with weights of single models e.g. [0,0.6,0.4]
@@ -1080,7 +1180,11 @@ def calculate_weighted_accuracy(prediction_weights, preds, nb_classes, X, Y):
     :param Y: true labels for X
     :return: y_true_small == True labels for complete sequences, yTrue == True labels for complete subsequences, y_pred_mean == with mean predicted labels for complete sequences, y_pred_voted == voted labels for complete sequences, y_pred == predicted labels for complete subsequences
     """
-    weighted_predictions = np.zeros((X.shape[0], nb_classes), dtype='float32')
+    if multiBatch:
+        weighted_predictions = np.zeros((X.shape[1], nb_classes), dtype='float32')
+    else:
+        weighted_predictions = np.zeros((X.shape[0], nb_classes), dtype='float32')
+
     for weight, prediction in zip(prediction_weights, preds):
         weighted_predictions += weight * prediction
 
@@ -1123,7 +1227,7 @@ def run_tests_for_plotting():
     #               accuracy=True, epochs=50, repeat=False, use_repeat_spacer=False, batch_norm=False)
     #
     test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design4_emanuel",
-                  do_shrink_timesteps=True,voting=False, design=4, nodes=100, faster=True,
+                  do_shrink_timesteps=True, voting=False, design=4, nodes=100, faster=True,
                   titel="Accuracy BiDir LSTM normal-repeat and TBTT",
                   accuracy=True, epochs=15, repeat=True, use_repeat_spacer=False, batch_norm=False)
     #
@@ -1140,6 +1244,7 @@ def run_tests_for_plotting():
     #               do_shrink_timesteps=False, design=6, nodes=100, faster=True,
     #               titel="Accuracy left LSTM und Conv1D",accuracy=True, epochs=10, repeat=False, use_repeat_spacer=False,
     #               batch_norm=False)
+
 
 def test_and_plot(path, suffix, batch_norm=False, filter_trainset=False, use_old_dataset=False,
                   do_shrink_timesteps=True,
@@ -1163,10 +1268,10 @@ def test_and_plot(path, suffix, batch_norm=False, filter_trainset=False, use_old
     else:
         use_data_nanocomb(one_hot_encoding=one_hot_encoding, repeat=repeat, use_spacer=use_repeat_spacer)
 
-    if len(X_val)==0:
+    if len(X_val) == 0:
         print("make new val set")
         X_train, X_val, Y_train, Y_val = train_test_split(X_train, Y_train, test_size=val_size, random_state=SEED,
-                                                      stratify=Y_train)
+                                                          stratify=Y_train)
     else:
         print("val set already exits")
 
@@ -1230,6 +1335,9 @@ if __name__ == '__main__':
         use_data_nanocomb()
     #
 
+    # X_test = X_test[0:10]
+    # Y_test = Y_test[0:10]
+
     if do_shrink_timesteps:
         shrink_timesteps()  # input_subSeqlength=1000)
 
@@ -1254,11 +1362,15 @@ if __name__ == '__main__':
     #     model = baseline_model(epochs=5,fit=False)
     #     model.fit(model.fit(X_train, Y_train, epochs=epochs, batch_size=batch_size, callbacks=callbacks_list,validation_data=(X_test, Y_test)))
     # weights = prediction_from_Ensemble(51,X_val,Y_val,dir="/home/go96bix/projects/nanocomb/nanocomb/plots/weights/complex/",calc_weight=True, mean=False)
-    # prediction_from_Ensemble(51,X_test,Y_test,weights=weights,dir="/home/go96bix/projects/nanocomb/nanocomb/plots/weights/complex/")
+    weights = prediction_from_Ensemble(51, X_val, Y_val,
+                                       dir="/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5",
+                                       calc_weight=True, mean=False, multiBatch=True)
+    prediction_from_Ensemble(51, X_test, Y_test, weights=weights,
+                             dir="/home/go96bix/projects/nanocomb/nanocomb/")
     # # print(weights)
 
     # run_tests_for_plotting()
-    # exit()
+    exit()
     # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="long_bigNN_test", snapShotEnsemble=False,
     #               do_shrink_timesteps=False, design=3, nodes=100, faster=True, titel="Accuracy (n-1 Ebola-set)",
     #               accuracy=True, epochs=150,repeat=False)#, dropout=0.1)
@@ -1270,6 +1382,7 @@ if __name__ == '__main__':
     # exit()
     model = load_model(
         "/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5")
+    # "/home/go96bix/projects/nanocomb/nanocomb/models/weights.best.design1_normal-repeat-TBTT.hdf5")
     pred = model.predict(X_test)
     # np.savetxt('/home/go96bix/projects/nanocomb/nanocomb/pred_vector_train.csv', pred, fmt='%s', delimiter=',')
     # exit()
