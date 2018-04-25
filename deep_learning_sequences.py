@@ -1154,7 +1154,6 @@ def prediction_from_Ensemble(nb_classes, X, Y, dir="/home/go96bix/weights", calc
 
         X = np.array(X_reorder)
         Y = Y_reorder
-        print(np.array(preds).size)
         preds = np.array(preds).reshape((batch_size, (np.array(preds).size // nb_classes) // batch_size, nb_classes))
 
     prediction_weights = [1. / len(models_filenames)] * len(models_filenames)
@@ -1366,7 +1365,7 @@ if __name__ == '__main__':
                                        dir="/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5",
                                        calc_weight=True, mean=False, multiBatch=True)
     prediction_from_Ensemble(51, X_test, Y_test, weights=weights,
-                             dir="/home/go96bix/projects/nanocomb/nanocomb/")
+                             dir="/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5", multiBatch=True)
     # # print(weights)
 
     # run_tests_for_plotting()
