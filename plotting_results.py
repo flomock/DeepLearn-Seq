@@ -17,7 +17,7 @@ def plotting_history(path, file, titel, x_axes='', y_axes='', accuracy=False, lo
     totalEpochs = len(history['Unnamed: 0'])
     uniqueEpochs = len(history['Unnamed: 0'].unique())
     max_evals = totalEpochs // uniqueEpochs
-    history = np.reshape(history.values, (max_evals, int(history.values.shape[0] / max_evals), history.values.shape[1]))
+    history = np.reshape(history.values, (max_evals, history.values.shape[0] // max_evals, history.values.shape[1]))
 
     # If you want to control which colors matplotlib cycles through, use ax.set_color_cycle:
     fig, ax = plt.subplots()

@@ -1,12 +1,13 @@
 #!/home/go96bix/my/programs/Python-3.6.1/bin/python3.6
+from logging import warning
 from pyexpat import model
-
 import numpy as np
 # import datetime
 import tensorflow as tf
 from keras import backend as K
 import pandas as pd
 from keras.utils import multi_gpu_model
+from matplotlib.dates import num2date
 from sklearn.utils import class_weight as clw
 # from keras.backend.cntk_backend import argmax
 # from keras.backend.cntk_backend import dropout
@@ -96,26 +97,38 @@ class lrManipulator(keras.callbacks.Callback):
 class TimeHistory(keras.callbacks.Callback):
     """https://stackoverflow.com/questions/43178668/record-the-computation-time-for-each-epoch-in-keras-during-model-fit"""
 
+    # def on_train_begin(self, logs={}):
+    #     self.times = []
+    #     self.time_train_start = time.time()
+
     def on_train_begin(self, logs={}):
-        self.times = []
-        self.time_train_start = time.time()
+        if not hasattr(self, 'times'):
+            self.times = []
+            self.time_train_start = time.time()
 
     # def on_epoch_begin(self, batch, logs={}):
     #     self.epoch_time_start = datetime.time()
 
+    # def on_epoch_end(self, batch, logs={}):
+    #     self.times.append(int(time.time()) - int(self.time_train_start))
+
     def on_epoch_end(self, batch, logs={}):
+        logs = logs or {}
         self.times.append(int(time.time()) - int(self.time_train_start))
+        # for k, v in logs.items():
+        #     self.history.setdefault(k, []).append(v)
 
 
 class accuracyHistory(keras.callbacks.Callback):
     """to get the accuracy of my personal voting scores"""
 
     def on_train_begin(self, logs={}):
-        self.meanVote_train = []
-        self.normalVote_train = []
+        if not hasattr(self, 'meanVote_train'):
+            # self.meanVote_train = []
+            # self.normalVote_train = []
 
-        self.meanVote_val = []
-        self.normalVote_val = []
+            self.meanVote_val = []
+            self.normalVote_val = []
 
         # self.meanVote_test = []
         # self.normalVote_test = []
@@ -128,13 +141,14 @@ class accuracyHistory(keras.callbacks.Callback):
         1. make prediction of train
         2. get the voting results
         3. calc and save accuracy
-        4. do same for test set
+        4. do same for val set
         """
-        self.prediction_train = (self.model.predict(X_train))
-        y_true_small, y_pred_mean_train, y_pred_voted_train, y_pred, y_pred_mean_exact = \
-            calc_predictions(X_train, Y_train, do_print=False, y_pred=self.prediction_train)
-        self.normalVote_train.append(metrics.accuracy_score(y_true_small, y_pred_voted_train))
-        self.meanVote_train.append(metrics.accuracy_score(y_true_small, y_pred_mean_train))
+        logs = logs or {}
+        # self.prediction_train = (self.model.predict(X_train))
+        # y_true_small, y_pred_mean_train, y_pred_voted_train, y_pred, y_pred_mean_exact = \
+        #     calc_predictions(X_train, Y_train, do_print=False, y_pred=self.prediction_train)
+        # self.normalVote_train.append(metrics.accuracy_score(y_true_small, y_pred_voted_train))
+        # self.meanVote_train.append(metrics.accuracy_score(y_true_small, y_pred_mean_train))
 
         self.prediction_val = (self.model.predict(X_val))
         y_true_small, y_pred_mean_val, y_pred_voted_val, y_pred, y_pred_mean_exact = \
@@ -157,9 +171,9 @@ class prediction_history(keras.callbacks.Callback):
         print(K.get_value(self.model.optimizer.lr))
         print(K.get_value(self.model.optimizer.iterations))
         # shuffle X and Y in sam way
-        p = np.random.permutation(len(Y_test))
-        shuffled_X = X_test[p]
-        shuffled_Y = Y_test[p]
+        p = np.random.permutation(len(Y_val))
+        shuffled_X = X_val[p]
+        shuffled_Y = Y_val[p]
         self.predhis = (self.model.predict(shuffled_X[0:10]))
         # y_pred = my_model.predict(X_test)
         # print(self.predhis)
@@ -176,7 +190,38 @@ class prediction_history(keras.callbacks.Callback):
         print(table)
 
 
-def shrink_timesteps(input_subSeqlength=0):
+class History(keras.callbacks.Callback):
+    """
+    Callback that records events into a `History` object.
+
+    This callback is automatically applied to
+    every Keras model. The `History` object
+    gets returned by the `fit` method of models.
+    """
+
+    def on_train_begin(self, logs=None):
+        if not hasattr(self, 'epoch'):
+            self.epoch = []
+            self.history = {}
+
+    def on_epoch_end(self, epoch, logs=None):
+        logs = logs or {}
+        self.epoch.append(epoch)
+        for k, v in logs.items():
+            self.history.setdefault(k, []).append(v)
+
+
+class StopEarly(keras.callbacks.Callback):
+    """
+    Callback that stops training after an epoch
+    important for online training
+    """
+
+    def on_epoch_end(self, epoch, logs=None):
+        self.model.stop_training = True
+
+
+def shrink_timesteps(input_subSeqlength=0, X=[], Y=[]):
     """
         needed for Truncated Backpropagation Through Time
     If you have long input sequences, such as thousands of timesteps,
@@ -188,61 +233,99 @@ def shrink_timesteps(input_subSeqlength=0):
     :param input_subSeqlength: set for specific subsequence length
     :return:
     """
-    global X_train, X_test, X_val, Y_train, Y_test, Y_val, batch_size
-    print(X_train.max())
-    samples = X_train.shape[0]
-    seqlength = X_train.shape[1]
-    features = X_train.shape[2]
+    if len(X)==0 or len(Y)==0:
+        global X_train, X_test, X_val, Y_train, Y_test, Y_val, batch_size
+        # print(X_train.max())
+        print(X_train.shape)
+        samples = X_train.shape[0]
+        seqlength = X_train.shape[1]
+        features = X_train.shape[2]
 
-    # search for possible new shape without loss
-    subSeqlength = input_subSeqlength
-    if input_subSeqlength == 0:
-        for i in range(200, 400):
-            if (seqlength % i == 0):
-                subSeqlength = i
+        # search for possible new shape without loss
+        subSeqlength = input_subSeqlength
+        if input_subSeqlength == 0:
+            for i in range(200, 400):
+                if (seqlength % i == 0):
+                    subSeqlength = i
 
-                X_train = X_train.reshape((int(seqlength / subSeqlength) * samples, subSeqlength, features))
-                X_test = X_test.reshape((int(seqlength / subSeqlength) * X_test.shape[0], subSeqlength, features))
-                X_val = X_val.reshape((int(seqlength / subSeqlength) * X_val.shape[0], subSeqlength, features))
-                break
-    # if without loss not possible or special shape wanted
-    if input_subSeqlength == subSeqlength:
-        if subSeqlength == 0:
-            subSeqlength = 100
-        # cut of the end of the sequence
-        newSeqlength = int(seqlength / subSeqlength) * subSeqlength
+                    X_train = X_train.reshape((int(seqlength / subSeqlength) * samples, subSeqlength, features))
+                    X_test = X_test.reshape((int(seqlength / subSeqlength) * X_test.shape[0], subSeqlength, features))
+                    X_val = X_val.reshape((int(seqlength / subSeqlength) * X_val.shape[0], subSeqlength, features))
+                    break
+        # if without loss not possible or special shape wanted
+        if input_subSeqlength == subSeqlength:
+            if subSeqlength == 0:
+                subSeqlength = 100
+            # cut of the end of the sequence
+            newSeqlength = int(seqlength / subSeqlength) * subSeqlength
+            i = 0
+            for j in (X_train, X_test, X_val):
+                bigarray = []
+                for sample in j:
+                    sample = np.array(sample[0:newSeqlength], dtype=int)
+                    subarray = sample.reshape((int(seqlength / subSeqlength), subSeqlength, features))
+                    bigarray.append(subarray)
+                bigarray = np.array(bigarray)
+                bigarray = bigarray.reshape(
+                    (bigarray.shape[0] * bigarray.shape[1], bigarray.shape[2], bigarray.shape[3]))
+                if i == 0:
+                    X_train = bigarray
+                if i == 1:
+                    X_test = bigarray
+                else:
+                    X_val = bigarray
+                i += 1
+        # expand Y files (real classes for samples)
         i = 0
-        for j in (X_train, X_test, X_val):
+        for j in (Y_train, Y_test, Y_val):
             bigarray = []
             for sample in j:
+                bigarray.append(int(seqlength / subSeqlength) * [sample])
+            bigarray = np.array(bigarray)
+            print(bigarray.shape)
+            bigarray = bigarray.reshape((bigarray.shape[0] * bigarray.shape[1], bigarray.shape[2]))
+            if (i == 0):
+                Y_train = bigarray
+            if i == 1:
+                Y_test = bigarray
+            else:
+                Y_val = bigarray
+            i += 1
+        batch_size = int(seqlength / subSeqlength)
+    else:
+        assert input_subSeqlength != 0, "must provide variable \"input_subSeqlength\" when using shrink_timesteps for specific subset"
+        if len(X.shape) == 3:
+            seqlength = X.shape[1]
+            subSeqlength = input_subSeqlength
+            newSeqlength = int(seqlength / subSeqlength) * input_subSeqlength
+            features = X.shape[-1]
+            bigarray = []
+            for sample in X:
                 sample = np.array(sample[0:newSeqlength], dtype=int)
                 subarray = sample.reshape((int(seqlength / subSeqlength), subSeqlength, features))
                 bigarray.append(subarray)
             bigarray = np.array(bigarray)
-            bigarray = bigarray.reshape((bigarray.shape[0] * bigarray.shape[1], bigarray.shape[2], bigarray.shape[3]))
-            if i == 0:
-                X_train = bigarray
-            if i == 1:
-                X_test = bigarray
-            else:
-                X_val = bigarray
-            i += 1
-    # expand Y files (real classes for samples)
-    i = 0
-    for j in (Y_train, Y_test, Y_val):
-        bigarray = []
-        for sample in j:
-            bigarray.append(int(seqlength / subSeqlength) * [sample])
-        bigarray = np.array(bigarray)
-        bigarray = bigarray.reshape((bigarray.shape[0] * bigarray.shape[1], bigarray.shape[2]))
-        if (i == 0):
-            Y_train = bigarray
-        if i == 1:
-            Y_test = bigarray
+            X = bigarray.reshape((bigarray.shape[0] * bigarray.shape[1], bigarray.shape[2], bigarray.shape[3]))
+
+        elif len(X.shape) == 2:
+            seqlength = X.shape[0]
+            subSeqlength = input_subSeqlength
+            newSeqlength = int(seqlength / subSeqlength) * input_subSeqlength
+            features = X.shape[-1]
+            bigarray = []
+            sample = np.array(X[0:newSeqlength], dtype=int)
+            subarray = sample.reshape((int(seqlength / subSeqlength), subSeqlength, features))
+            X = np.array(subarray)
+
         else:
-            Y_val = bigarray
-        i += 1
-    batch_size = int(seqlength / subSeqlength)
+            assert len(X.shape) == 2 or len(
+                X.shape) == 3, f"wrong shape of input X, expect len(shape) to be 2 or 3 but is instead {len(X.shape)}"
+        y = []
+        for i in Y:
+            y.append(int(seqlength / subSeqlength)*[i])
+        Y = np.array(y).flatten()
+
+        return X, Y
 
 
 def use_old_data_max(one_hot_encoding=True):
@@ -353,21 +436,21 @@ def use_old_data(one_hot_encoding=True):
     Y_train = one_hot_encode_string(Y_train_old)
 
 
-def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLen=None):
+def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLen=None, online=False, unbalanced=False):
     """
     to use the nanocomb exported data
     """
 
-    Y_train_old = pd.read_csv(directory + '/Y_train.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
-    Y_test_old = pd.read_csv(directory + '/Y_test.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
-    X_train_old = pd.read_csv(directory + '/X_train.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
-    X_test_old = pd.read_csv(directory + '/X_test.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
+    Y_train_old = pd.read_csv(directory + '/Y_train.csv', delimiter='\t', dtype='str', header=None)[1].values
+    Y_test_old = pd.read_csv(directory + '/Y_test.csv', delimiter='\t', dtype='str', header=None)[1].values
+    X_train_old = pd.read_csv(directory + '/X_train.csv', delimiter='\t', dtype='str', header=None)[1].values
+    X_test_old = pd.read_csv(directory + '/X_test.csv', delimiter='\t', dtype='str', header=None)[1].values
 
     create_val = False
 
     try:
-        Y_val_old = pd.read_csv(directory + '/Y_val.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
-        X_val_old = pd.read_csv(directory + '/X_val.csv', delimiter='\t', dtype='str', header=None)[1].as_matrix()
+        Y_val_old = pd.read_csv(directory + '/Y_val.csv', delimiter='\t', dtype='str', header=None)[1].values
+        X_val_old = pd.read_csv(directory + '/X_val.csv', delimiter='\t', dtype='str', header=None)[1].values
         print("loaded validation set from: " + directory + '/Y_val.csv')
     except:
         print("create validation set from train")
@@ -377,6 +460,7 @@ def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLe
 
         """
         One hot encoding
+        to convert the "old" exported int data via OHE to binary matrix
         http://machinelearningmastery.com/how-to-one-hot-encode-sequence-data-in-python/
         """
 
@@ -385,7 +469,7 @@ def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLe
         encoded_data = encoded_data.reshape((data.shape[0], data.shape[1], num_classes))
         return encoded_data
 
-    def encode_string(maxLen=None, x=[], y=[]):
+    def encode_string(maxLen=None, x=[], y=[], y_encoder=None):
 
         """
         One hot encoding for classes
@@ -464,8 +548,8 @@ def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLe
         if len(x) > 0:
             # x = [list(dnaSeq) for dnaSeq in x]
             # x = pad_sequences(x, maxlen=maxLen, dtype='str', padding='pre', truncating='pre', value="-")
-            # a = "ATGCN-"
-            a = "ATGCN"
+            a = "ATGCN-"
+            # a = "ATGCN"
             encoder.fit(list(a))
             print(encoder.classes_)
             print(encoder.transform(encoder.classes_))
@@ -477,20 +561,81 @@ def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLe
 
             # encoded_Y = encoder.transform(y)
             # out = pad_sequences(out, maxlen=maxLen, dtype='int16', padding='pre', truncating='pre', value=0)#value=encoder.transform(encoder.classes_)[-1]+1)
-            out = pad_n_repeat_sequences(out, maxlen=maxLen, dtype='int32', truncating='pre', value=0)
+            # if not unbalanced or x != X_train_old:
+            if online and x.size == X_train_old.size:
+                X_train_categorial = []
+                for seq in out:
+                    X_train_categorial.append(np.array(to_categorical(seq, num_classes=len(a)), dtype=np.bool))
+                return X_train_categorial
+            else:
+                out = pad_n_repeat_sequences(out, maxlen=maxLen, dtype='int16', truncating='pre', value=0)
 
             # normalize
             # out = out / (len(a) - 1)
 
             # return to_categorical(out).reshape((out.shape[0], out.shape[1], len(a)))
-            return to_categorical(out)
+            # return to_categorical(out)
+            return np.array(to_categorical(out, num_classes=len(a)), dtype=np.bool)
             # return out.reshape((out.shape[0], out.shape[1], 1))
         else:
-            encoder.fit(y)
-            print(encoder.classes_)
-            print(encoder.transform(encoder.classes_))
-            encoded_Y = encoder.transform(y)
-            return to_categorical(encoded_Y)
+            if y_encoder != None:
+                encoder.fit(y)
+                print(encoder.classes_)
+                print(encoder.transform(encoder.classes_))
+                if np.array(encoder.classes_ != y_encoder.classes_).all():
+                    warning(f"Warning not same classes in training and test set")
+                # assert encoder.classes_ == y_classes, f"Warning not same classes in training and test set"
+                useable_classes = set(encoder.classes_).intersection(y_encoder.classes_)
+                print(useable_classes)
+                # if len(useable_classes) != len(encoder.classes_):
+                #     warnings.warn(
+                #         f"not all test classes in training data, only {useable_classes} predictable from {len(encoder.classes_)} different classes\ntest set will be filtered so only predictable classes are included")
+                try:
+                    assert np.array(encoder.classes_ == y_encoder.classes_).all()
+                except AssertionError:
+                    warning(
+                        f"not all test classes in training data, only {useable_classes} predictable "
+                        f"from {len(encoder.classes_)} different classes\ntest set will be filtered so only predictable"
+                        f" classes are included")
+
+                try:
+                    assert len(useable_classes) == len(encoder.classes_)
+                except AssertionError:
+                    print(f"not all test classes in training data, only " \
+                          f"{useable_classes} predictable from {len(encoder.classes_)} different classes" \
+                          f"\ntest set will be filtered so only predictable classes are included")
+
+                # assert len(useable_classes)==len(encoder.classes_), f"not all test classes in training data, only " \
+                #                     f"{useable_classes} predictable from {len(encoder.classes_)} different classes" \
+                #                     f"\ntest set will be filtered so only predictable classes are included"
+
+                if not len(useable_classes) == len(encoder.classes_):
+                    global X_test, Y_test
+                    arr = np.zeros(X_test.shape[0], dtype=int)
+                    for i in useable_classes:
+                        arr[y == i] = 1
+
+                    X_test = X_test[arr == 1, :]
+                    y = y[arr == 1]
+                    encoded_Y = y_encoder.transform(y)
+                else:
+                    encoded_Y = encoder.transform(y)
+
+                return to_categorical(encoded_Y, num_classes=len(y_encoder.classes_))
+
+            else:
+                encoder.fit(y)
+                print(encoder.classes_)
+                print(encoder.transform(encoder.classes_))
+                encoded_Y = encoder.transform(y)
+                return to_categorical(encoded_Y), encoder
+
+    if create_val:
+        assert unbalanced == False, "an unbalanced training set needs a predefined validation set"
+        X_train_old, X_val_old, Y_train_old, Y_val_old = train_test_split(X_train_old, Y_train_old, test_size=0.3,
+                                                                          random_state=SEED,
+                                                                          stratify=Y_train_old)
+        create_val = False
 
     if one_hot_encoding:
         global X_test, X_train, X_val, Y_test, Y_train, Y_val
@@ -509,23 +654,19 @@ def use_data_nanocomb(one_hot_encoding=True, repeat=True, use_spacer=True, maxLe
             maxLen = length[int(len(length) * 0.95)]
             print(maxLen)
 
-        X_test = encode_string(maxLen, x=X_test_old)
         X_train = encode_string(maxLen, x=X_train_old)
+        X_test = encode_string(maxLen, x=X_test_old)
         if create_val == False:
             X_val = encode_string(maxLen, x=X_val_old)
     else:
-        X_test = X_test_old
         X_train = X_train_old
+        X_test = X_test_old
         if create_val == False:
             X_val = X_val_old
 
-    Y_test = encode_string(y=Y_test_old)
-    Y_train = encode_string(y=Y_train_old)
-    if create_val:
-        X_train, X_val, Y_train, Y_val = train_test_split(X_train, Y_train, test_size=0.3, random_state=SEED,
-                                                          stratify=Y_train)
-    else:
-        Y_val = encode_string(y=Y_val_old)
+    Y_train, y_encoder = encode_string(y=Y_train_old)
+    Y_test = encode_string(y=Y_test_old, y_encoder=y_encoder)
+    Y_val = encode_string(y=Y_val_old, y_encoder=y_encoder)
 
 
 def filter_train_data(species_to_keep=[1, 2]):
@@ -610,7 +751,8 @@ def baseline_model(design=1, epochs=50, fit=True, decay=False):
 
 def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, dropout=0, timesteps="default",
                    faster=False, path="/home/go96bix/Dropbox/Masterarbeit/ML", voting=False, tensorboard=False,
-                   gpus=False, snapShotEnsemble=False, shuffleTraining=True, batch_norm=False):
+                   gpus=False, snapShotEnsemble=False, shuffleTraining=True, batch_norm=False, online_training=False,
+                   do_shrink_timesteps=True, use_generator=True):
     """
     method to train a model with specified properties, saves training behavior in /$path/"history"+suffix+".csv"
     :param design: parameter for complexity of the NN, 0 == 2 layer GRU, 1 == 2 layer LSTM, 2 == 3 layer LSTM
@@ -628,13 +770,33 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
     :return: dict with loss and model
     """
     model = Sequential()
-    global batch_size, X_train
+    global batch_size, X_train, X_test, Y_train, directory
+
+    # Y_train_noOHE = np.argmax(Y_train, axis=1)
+    Y_train_noOHE = [y.argmax() for y in Y_train]
+    class_weight = clw.compute_class_weight('balanced', np.unique(Y_train_noOHE), Y_train_noOHE)
+    class_weight_dict = {i: class_weight[i] for i in range(len(class_weight))}
+    class_weight = class_weight_dict
+    print(class_weight)
+
+    if online_training:
+        X_train_copy = X_train
+        X_train = X_test
+        Y_train_copy = Y_train
+        Y_train = Y_test
+
+        subSeqLength = 100
+        timesteps = subSeqLength
     if timesteps == "default":
         timesteps = X_train.shape[1]
     if faster:
         batch = batch_size * 16
     else:
         batch = batch_size
+
+    # class_weight = clw.compute_class_weight('balanced', np.unique(Y_train), Y_train)
+    # sample_weights = clw.compute_sample_weight('balanced', Y_train)
+
     # if gpus:
     #     LSTM = keras.layers.CuDNNLSTM
     if design == 0:
@@ -725,6 +887,7 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
     model.summary()
     # adam = optimizers.Adam(lr=0.00005, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
     # model.compile(optimizer=adam, loss='categorical_crossentropy', metrics=['acc'])
+
     if gpus >= 2:
         model_basic = model
         with tf.device("/cpu:0"):
@@ -737,7 +900,8 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
         parallel_model = multi_gpu_model(model, gpus=gpus)
         model = parallel_model
 
-    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['acc'])
+    model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['acc'], sample_weight_mode=None)
+    # return model
     filepath = directory + "/weights.best." + suffix + ".hdf5"
     # checkpoint = ModelCheckpoint(filepath, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
     checkpoint = ModelCheckpoint(filepath, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
@@ -775,24 +939,174 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
     # class_weight = {0: 1.,
     #                 1: 11.,
     #                 }
-    # class_weight = clw.compute_class_weight('balanced', np.unique(Y_train), Y_train)
 
-    hist = model.fit(X_train[0:int(len(X_train) / sampleSize)], Y_train[0:int(len(X_train) / sampleSize)],
-                     epochs=epochs, batch_size=batch, callbacks=callbacks_list,
-                     validation_data=(X_val, Y_val), class_weight=class_weight, shuffle=shuffleTraining)
+
+
+    if use_generator:
+        # [print(n.name) for n in tf.get_default_graph().as_graph_def().node]
+        # hist = model.fit(X_train[0:int(len(X_train) / sampleSize)], Y_train[0:int(len(X_train) / sampleSize)],
+        #                  epochs=epochs, batch_size=batch, callbacks=callbacks_list,
+        #                  validation_data=(X_val, Y_val), class_weight=class_weight,  # sample_weight=sample_weights,
+        #                  shuffle=shuffleTraining)
+        from DataGenerator import DataGenerator
+        if do_shrink_timesteps:
+            number_subsequences = batch_size
+        else:
+            number_subsequences = 1
+        params = {"number_subsequences": number_subsequences, "dim": timesteps, "n_channels": X_train.shape[-1],
+                  "n_classes": Y_train.shape[-1], "shuffle": True, "online_training": True}
+        # global directory
+        training_generator = DataGenerator(directory=directory + "/train", **params)
+
+        hist = model.fit_generator(generator=training_generator,
+                                   epochs=epochs, callbacks=callbacks_list,
+                                   validation_data=(X_val, Y_val), class_weight=class_weight,
+                                   # sample_weight=sample_weights,
+                                   shuffle=shuffleTraining)
+    else:
+        if online_training == True:
+            from multiprocessing.dummy import Pool as ThreadPool
+            import multiprocessing
+
+            pool = ThreadPool(multiprocessing.cpu_count())
+
+            print(np.array(X_train_copy).shape)
+            assert X_train.shape[2] == 6, "different base coding, not -,A,C,G,N,T"
+            print("expect -,A,C,G,N,T to categorial")
+
+            # filter to small samples
+            index_clean = [i for i, j in enumerate(X_train_copy) if len(j) > subSeqLength]
+            X_train_copy_clean = [X_train_copy[i] for i in index_clean]
+            Y_train_copy_clean = [Y_train_copy[i] for i in index_clean]
+
+            # bases = "ATGCN-"
+            # encoder = LabelEncoder()
+            # encoder.fit(list(bases))
+            # encoded_X = encoder.transform(list("ACGT"))
+            # bases_OHE = np.array(to_categorical(encoded_X), dtype=np.bool)
+
+            # a, c, g, t = bases_OHE[0], bases_OHE[1], bases_OHE[2], bases_OHE[3]
+
+            def manipulate_training_data():
+                X_train_manipulated = []
+
+                def make_manipulation(sample):
+                    if len(sample) > subSeqLength:
+                        X_train_manipulated = []
+                        for i in range(batch_size):
+                            start = random.randint(0, len(sample) - subSeqLength)
+                            subSeq = sample[start:start + subSeqLength]
+                            # if random.randint(0, 1) == 1:
+                            #     # make reverse complementary
+                            #     # reverse
+                            #     subSeq = subSeq[::-1]
+                            #     # complementary
+                            #     subSeq[(subSeq == a).all(1)] = t
+                            #     subSeq[(subSeq == c).all(1)] = g
+                            #     subSeq[(subSeq == g).all(1)] = c
+                            #     subSeq[(subSeq == t).all(1)] = a
+
+                            X_train_manipulated.append(subSeq)
+                        return np.array(X_train_manipulated)
+                    else:
+                        return
+
+                X_train_manipulated_total = pool.map(make_manipulation, X_train_copy_clean)
+                X_train_manipulated_total = np.array(X_train_manipulated_total)
+                shape = X_train_manipulated_total.shape
+                X_train_manipulated_total = X_train_manipulated_total.reshape(
+                    (len(X_train_copy_clean) * batch_size, shape[2], shape[3]))
+
+                # for sample in X_train_copy:
+                #     X_train_manipulated_total = np.append(X_train_manipulated_total,X_train_manipulated, axis=0)
+                # for sample in X_train_copy:
+                # for i in range(batch):
+                #     start = random.randint(0, len(sample) - subSeqLength)
+                #     subSeq = sample[start:start + subSeqLength]
+                #     if random.randint(0, 1) == 1:
+                #         # make reverse complementary
+                #         # reverse
+                #         subSeq = subSeq[::-1]
+                #         # complementary
+                #         subSeq[(subSeq == a).all(1)] = t
+                #         subSeq[(subSeq == c).all(1)] = g
+                #         subSeq[(subSeq == g).all(1)] = c
+                #         subSeq[(subSeq == t).all(1)] = a
+                #
+                #     X_train_manipulated.append(subSeq)
+
+                return np.array(X_train_manipulated_total)
+
+            # to reduce memory
+            # X_train = X_test
+            Y_train = Y_train_copy_clean
+            print("length before shrinking")
+            print(f"X_train: {len(X_train_copy)}\n X_val: {len(X_val)}")
+            print("shrink timesteps")
+            shrink_timesteps(input_subSeqlength=subSeqLength)
+            print("length after shrinking")
+            print(f"X_train: {len(X_train_copy)} \n X_val: {len(X_val)}")
+            print(f"batchsize: {batch_size}")
+            # print("calc sample weights")
+            # sample_weights = clw.compute_sample_weight('balanced', Y_train)
+            #     shrink val und test "normal"
+
+            hist = History()
+            stop = StopEarly()
+            callbacks_list.append(hist)
+            callbacks_list.append(stop)
+
+            for epo in range(epochs):
+                print("manipulate Xtrain")
+                X_train_manipulated = manipulate_training_data()
+                print(len(X_train_manipulated))
+                print("start training")
+                # if epo % 20 ==0:
+                #     model.fit(X_train_manipulated, Y_train_copy,
+                #           epochs=epochs, batch_size=batch, callbacks=callbacks_list, initial_epoch=epo,
+                #           validation_data=(X_val,Y_val), class_weight=class_weight, shuffle=shuffleTraining)
+                # else:
+                #     model.fit(X_train_manipulated, Y_train_copy,
+                #           epochs=epochs, batch_size=batch, callbacks=callbacks_list, initial_epoch=epo,
+                #           validation_data=None, class_weight=class_weight, shuffle=shuffleTraining)
+                Y_train_noOHE = [y.argmax() for y in Y_train[0:int(len(X_train_manipulated) / sampleSize)]]
+                sample_weights = clw.compute_sample_weight('balanced', Y_train_noOHE)
+                print(sample_weights)
+
+                unique, counts = np.unique(Y_train_noOHE, return_counts=True)
+                print(dict(zip(unique, counts)))
+                class_weight = clw.compute_class_weight('balanced', np.unique(Y_train_noOHE), Y_train_noOHE)
+                class_weight_dict = {i: class_weight[i] for i in range(len(class_weight))}
+                class_weight = class_weight_dict
+                print(class_weight)
+
+                model.fit(X_train_manipulated[0:int(len(X_train_manipulated) / sampleSize)],
+                          Y_train[0:int(len(X_train_manipulated) / sampleSize)],
+                          epochs=epochs, batch_size=batch, callbacks=callbacks_list, initial_epoch=epo,
+                          validation_data=(X_val, Y_val), class_weight=class_weight, shuffle=shuffleTraining)
+                # validation_data=(X_val, Y_val), shuffle=shuffleTraining, sample_weight=sample_weights)
+
+        else:
+            hist = model.fit(X_train[0:int(len(X_train) / sampleSize)], Y_train[0:int(len(X_train) / sampleSize)], epochs=epochs, callbacks=callbacks_list, batch_size=batch,
+                                   validation_data=(X_val, Y_val), class_weight=class_weight,
+                                   # sample_weight=sample_weights,
+                                   shuffle=shuffleTraining)
+
     times = time_callback.times
     if voting:
-        acc_votes = myAccuracy.normalVote_train
-        acc_means = myAccuracy.meanVote_train
+        # acc_votes = myAccuracy.normalVote_train
+        # acc_means = myAccuracy.meanVote_train
         val_acc_votes = myAccuracy.normalVote_val
         val_acc_means = myAccuracy.meanVote_val
 
     if not os.path.isfile(path + "/history" + suffix + ".csv"):
         histDataframe = pd.DataFrame(hist.history)
+        cols = ["acc", "loss", "val_acc", "val_loss"]
+        histDataframe = histDataframe[cols]
         histDataframe = histDataframe.assign(time=times)
         if voting:
-            histDataframe = histDataframe.assign(acc_vote=acc_votes)
-            histDataframe = histDataframe.assign(acc_mean=acc_means)
+            # histDataframe = histDataframe.assign(acc_vote=acc_votes)
+            # histDataframe = histDataframe.assign(acc_mean=acc_means)
             histDataframe = histDataframe.assign(val_acc_vote=val_acc_votes)
             histDataframe = histDataframe.assign(val_acc_mean=val_acc_means)
         histDataframe.to_csv(path + "/history" + suffix + ".csv")
@@ -800,14 +1114,15 @@ def model_for_plot(design=1, sampleSize=1, nodes=32, suffix="", epochs=100, drop
         histDataframe = pd.DataFrame(hist.history)
         histDataframe = histDataframe.assign(time=times)
         if voting:
-            histDataframe = histDataframe.assign(acc_vote=acc_votes)
-            histDataframe = histDataframe.assign(acc_mean=acc_means)
+            # histDataframe = histDataframe.assign(acc_vote=acc_votes)
+            # histDataframe = histDataframe.assign(acc_mean=acc_means)
             histDataframe = histDataframe.assign(val_acc_vote=val_acc_votes)
             histDataframe = histDataframe.assign(val_acc_mean=val_acc_means)
         histDataframe.to_csv(path + "/history" + suffix + ".csv", mode='a', header=False)
     # model.save(directory + "/deep-model-longrun" + ".h5")
     score, acc = model.evaluate(X_test, Y_test, verbose=0)
     print('Test accuracy:', acc)
+
     return {'loss': -acc, 'model': model}
 
 
@@ -935,6 +1250,11 @@ def calc_predictions(X, Y, y_pred, do_print=False):
         y_true_small.append(np.argmax(np.array(np.bincount(y_true[i * batch_size:i * batch_size + batch_size]))))
 
     if do_print:
+        # foo = []
+        # for arr in (y_true, y_pred, y_true_small, y_pred_voted, y_pred_mean, y_pred_mean_weight_std,
+        #                   y_pred_mean_weight_ent):
+        #     foo.append([new_host_label[i] for i in arr])
+        # y_true, y_pred, y_true_small, y_pred_voted, y_pred_mean, y_pred_mean_weight_std,y_pred_mean_weight_ent = foo[0],foo[1],foo[2],foo[3],foo[4],foo[5],foo[6]
         print_predictions(y_true, y_pred, y_true_small, y_pred_voted, y_pred_mean, y_pred_mean_weight_std,
                           y_pred_mean_weight_ent)
     return y_true_small, y_pred_mean, y_pred_voted, y_pred, np.array(y_pred_mean_exact)
@@ -1204,9 +1524,30 @@ def run_tests_for_plotting():
     setups for some of the tests from the masterthesis
     :return:
     """
-    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="baseline_design2",
-    #               do_shrink_timesteps=False, design=2, nodes=100, faster=True, titel="Accuracy no repeat",
-    #               accuracy=True, epochs=50, repeat=False, batch_norm=False)
+    global suffix, directory
+    suffix = 'species'
+    # suffix = 'TestSample'
+    # directory = '/home/go96bix/projects/nanocomb/nanocomb/' + suffix
+    # directory = '/home/go96bix/projects/nanocomb/nanocomb/50Hosts_phylo_unbalancedTraining/' + suffix
+    # directory = "/home/go96bix/projects/nanocomb/nanocomb/100Hosts_ssRNA/species"
+
+    # global directory
+    # directory_global = "/home/go96bix/deepLearnGPU/nanoComb/bigtest2/50Hosts_phylo"
+    directory_global = "/home/go96bix/projects/nanocomb/nanocomb/Influenza_handselected/balanced"
+    directory_global = "/home/go96bix/projects/nanocomb/nanocomb/Influenza_handselected_unbalanced/Y"
+    for root, dirs, files in os.walk(directory_global):
+        directory = root
+        print(directory)
+        if "Y_train.csv" in files:
+            test_and_plot(path=root, suffix="balanced_online", sampleSize=1,
+                          do_shrink_timesteps=True, voting=False, design=4, nodes=100, faster=True, gpus=False,
+                          titel="Accuracy BiDir LSTM normal-repeat, TBTT with spacer and online without reverse Compl.",
+                          dropout=0.2, accuracy=True, epochs=50, repeat=True, use_repeat_spacer=False, batch_norm=False,
+                          online_training=False, shuffleTraining=True, use_generator=True)
+
+    # test_and_plot(path='/home/go96bix/deepLearnGPU/nanoComb/', suffix="baseline_design2",
+    #               do_shrink_timesteps=False, design=4, nodes=100, faster=True, titel="Accuracy no repeat",
+    #               accuracy=True, epochs=50, repeat=False, batch_norm=False, gpus=1)
     #
     # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design1_spacer-repeat",
     #               do_shrink_timesteps=False, design=1, nodes=100, faster=True, titel="Accuracy with spacer-repeat",
@@ -1225,10 +1566,11 @@ def run_tests_for_plotting():
     #               titel="Accuracy BiDir LSTM",
     #               accuracy=True, epochs=50, repeat=False, use_repeat_spacer=False, batch_norm=False)
     #
-    test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design4_emanuel",
-                  do_shrink_timesteps=True, voting=False, design=4, nodes=100, faster=True,
-                  titel="Accuracy BiDir LSTM normal-repeat and TBTT",
-                  accuracy=True, epochs=15, repeat=True, use_repeat_spacer=False, batch_norm=False)
+    # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="ssRNA",
+    #               do_shrink_timesteps=False, voting=False, design=4, nodes=100, faster=False,
+    #               titel="Accuracy BiDir LSTM normal-repeat and TBTT", sampleSize=1,
+    #               accuracy=True, epochs=5, repeat=True, use_repeat_spacer=False, batch_norm=False,
+    #               online_training=True)
     #
     # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="design7",
     #               do_shrink_timesteps=False, design=7, nodes=100, faster=True,
@@ -1246,9 +1588,9 @@ def run_tests_for_plotting():
 
 
 def test_and_plot(path, suffix, batch_norm=False, filter_trainset=False, use_old_dataset=False,
-                  do_shrink_timesteps=True,
+                  do_shrink_timesteps=True, online_training=False, shuffleTraining=True,
                   one_hot_encoding=True, repeat=True, use_repeat_spacer=False, val_size=0.3, input_subSeqlength=0,
-                  design=1, sampleSize=1, nodes=32,
+                  design=1, sampleSize=1, nodes=32, use_generator=True,
                   snapShotEnsemble=False, epochs=100, dropout=0, timesteps="default", faster=False,
                   voting=False, tensorboard=False, gpus=False, titel='', x_axes='', y_axes='', accuracy=False,
                   loss=False, runtime=False, label1='', label2='', label3='', label4=''):
@@ -1260,12 +1602,19 @@ def test_and_plot(path, suffix, batch_norm=False, filter_trainset=False, use_old
     5. plots results
     :return:
     """
+    if online_training == True:
+        assert do_shrink_timesteps == False, "deactivate TBTT/do_shrink_timesteps if you wanna use online training"
+
     # GET SETTINGS AND PREPARE DATA
     global X_train, X_test, X_val, Y_train, Y_test, Y_val, batch_size, SEED, directory
     if use_old_dataset:
         use_old_data(one_hot_encoding=one_hot_encoding)
     else:
-        use_data_nanocomb(one_hot_encoding=one_hot_encoding, repeat=repeat, use_spacer=use_repeat_spacer)
+        Y_train_noOHE = [y.argmax() for y in Y_train]
+        class_weight = clw.compute_class_weight('balanced', np.unique(Y_train_noOHE), Y_train_noOHE)
+        unbalanced = any([i != class_weight[0] for i in class_weight])
+        use_data_nanocomb(one_hot_encoding=one_hot_encoding, repeat=repeat, use_spacer=use_repeat_spacer,
+                          online=online_training, unbalanced=unbalanced)
 
     if len(X_val) == 0:
         print("make new val set")
@@ -1289,7 +1638,7 @@ def test_and_plot(path, suffix, batch_norm=False, filter_trainset=False, use_old
         for i in locals().items():
             file.write(str(i) + '\n')
         if faster:
-            file.write('(\'batchsize\', ' + str(batch_size * 10) + ')\n')
+            file.write('(\'batchsize\', ' + str(batch_size * 16) + ')\n')
         else:
             file.write('(\'batchsize\', ' + str(batch_size) + ')\n')
         file.write('(\'SEED\', ' + str(SEED) + ')\n')
@@ -1297,14 +1646,29 @@ def test_and_plot(path, suffix, batch_norm=False, filter_trainset=False, use_old
 
     # START TRAINING
 
-    model_for_plot(design=design, sampleSize=sampleSize, nodes=nodes, suffix=suffix, epochs=epochs, dropout=dropout,
-                   timesteps=timesteps, faster=faster, path=path, voting=voting, tensorboard=tensorboard, gpus=gpus,
-                   snapShotEnsemble=snapShotEnsemble, shuffleTraining=not do_shrink_timesteps, batch_norm=batch_norm)
+    result_dict = model_for_plot(design=design, sampleSize=sampleSize, nodes=nodes, suffix=suffix, epochs=epochs,
+                                 dropout=dropout, use_generator=True, timesteps=timesteps, faster=faster, path=path,
+                                 voting=voting, tensorboard=tensorboard, gpus=gpus,
+                                 snapShotEnsemble=snapShotEnsemble, shuffleTraining=shuffleTraining,
+                                 batch_norm=batch_norm, online_training=online_training,
+                                 do_shrink_timesteps=do_shrink_timesteps)
+
+    model = result_dict["model"]
+    y_pred = model.predict(X_test)
+    calc_predictions(X_test, Y_test, y_pred, do_print=True)
+
+    model_path = f"{path}/weights.best.acc.{suffix}.hdf5"
+    print("load model:")
+    print(model_path)
+    model = load_model(model_path)
+    # model.load_weights(model_path)
+    pred = model.predict(X_test)
+    y_true_small, y_pred_mean, y_pred_voted, y_pred, y_pred_mean_exact = calc_predictions(X_test, Y_test, y_pred=pred,
+                                                                                          do_print=True)
 
     plotting_results.plotting_history(path=path, file="history" + suffix + ".csv", titel=titel, x_axes=x_axes,
-                                      y_axes=y_axes,
-                                      accuracy=accuracy, loss=loss, voting=voting, runtime=runtime, label1=label1,
-                                      label2=label2, label3=label3, label4=label4)
+                                      y_axes=y_axes, accuracy=accuracy, loss=loss, voting=voting, runtime=runtime,
+                                      label1=label1, label2=label2, label3=label3, label4=label4)
 
 
 if __name__ == '__main__':
@@ -1324,25 +1688,25 @@ if __name__ == '__main__':
     batch_size = 5  # X_train.shape[0]
 
     """define the folder where to find the training/testing data"""
-    suffix = '100Samples'
-
-    directory = '/home/go96bix/projects/nanocomb/nanocomb/' + suffix
-
-    if use_old_dataset:
-        use_old_data(one_hot_encoding=True)
-    else:
-        use_data_nanocomb()
+    suffix = '100Sample2_phylo/species'
     #
-
-    # X_test = X_test[0:10]
-    # Y_test = Y_test[0:10]
-
-    if do_shrink_timesteps:
-        shrink_timesteps()  # input_subSeqlength=1000)
-
-    """to limit the training on specified classes/hosts"""
-    if filter_trainset:
-        filter_train_data()
+    directory = '/home/go96bix/projects/nanocomb/nanocomb/' + suffix
+    # directory = "/home/go96bix/projects/nanocomb/nanocomb/Influenza_handselected/balanced"
+    # if use_old_dataset:
+    #     use_old_data(one_hot_encoding=True)
+    # else:
+    #     use_data_nanocomb()
+    # #
+    #
+    # # X_test = X_test[0:10]
+    # # Y_test = Y_test[0:10]
+    #
+    # if do_shrink_timesteps:
+    #     shrink_timesteps()  # input_subSeqlength=1000)
+    #
+    # """to limit the training on specified classes/hosts"""
+    # if filter_trainset:
+    #     filter_train_data()
 
     """if interested in cross validation"""
     # classic
@@ -1361,14 +1725,14 @@ if __name__ == '__main__':
     #     model = baseline_model(epochs=5,fit=False)
     #     model.fit(model.fit(X_train, Y_train, epochs=epochs, batch_size=batch_size, callbacks=callbacks_list,validation_data=(X_test, Y_test)))
     # weights = prediction_from_Ensemble(51,X_val,Y_val,dir="/home/go96bix/projects/nanocomb/nanocomb/plots/weights/complex/",calc_weight=True, mean=False)
-    weights = prediction_from_Ensemble(51, X_val, Y_val,
-                                       dir="/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5",
-                                       calc_weight=True, mean=False, multiBatch=True)
-    prediction_from_Ensemble(51, X_test, Y_test, weights=weights,
-                             dir="/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5", multiBatch=True)
+    # weights = prediction_from_Ensemble(51, X_val, Y_val,
+    #                                    dir="/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5",
+    #                                    calc_weight=True, mean=False, multiBatch=True)
+    # prediction_from_Ensemble(51, X_test, Y_test, weights=weights,
+    #                          dir="/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5", multiBatch=True)
     # # print(weights)
 
-    # run_tests_for_plotting()
+    run_tests_for_plotting()
     exit()
     # test_and_plot(path='/home/go96bix/projects/nanocomb/nanocomb/plots', suffix="long_bigNN_test", snapShotEnsemble=False,
     #               do_shrink_timesteps=False, design=3, nodes=100, faster=True, titel="Accuracy (n-1 Ebola-set)",
@@ -1379,10 +1743,18 @@ if __name__ == '__main__':
     # # # # snap_Shot_ensemble(nb_epoch=100,M=5,model_prefix="Flavi_m                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           yVersion")
     # # #
     # exit()
-    model = load_model(
-        "/home/go96bix/projects/nanocomb/nanocomb/weights.best.design4_repeat_vote.hdf5")
+    # model = load_model(
+    #     "/home/go96bix/projects/nanocomb/nanocomb/100Samples/weights.best.design4_emanuel.hdf5")
     # "/home/go96bix/projects/nanocomb/nanocomb/models/weights.best.design1_normal-repeat-TBTT.hdf5")
+    model = model_for_plot(design=4, nodes=100)
+    model.load_weights(
+        "/home/go96bix/projects/nanocomb/nanocomb/Influenza_handselected/balanced/weights.best.design4_OHE_spacer_online_NO_ReverseCompl.hdf5")
+    # model.save_weights("/home/go96bix/projects/nanocomb/nanocomb/weights_ara.hdf5")
+    # exit()
     pred = model.predict(X_test)
+
+    new_host_label = {6: 0, 9: 1, 3: 2, 4: 3, 1: 4, 2: 5, 7: 6, 10: 7, 0: 8, 8: 9, 5: 10}
+
     # np.savetxt('/home/go96bix/projects/nanocomb/nanocomb/pred_vector_train.csv', pred, fmt='%s', delimiter=',')
     # exit()
     # score, acc = model.evaluate(X_test, Y_test, verbose=0)
